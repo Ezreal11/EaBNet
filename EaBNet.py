@@ -734,15 +734,18 @@ def main(args, net):
     win_shift = int(args.win_shift * sr)
     fft_num = args.fft_num
     noisy_list, target_list, frame_list = [], [], []
+    #每个batch是batch_size*mics个wav
     for i in range(batch_size):
-        noisy_list.append(torch.rand(wav_len, mics))
-        target_list.append(torch.rand(wav_len))
+        noisy_list.append(torch.rand(wav_len, mics))    #[b, wav_len, mics]  mics个通道的wav
+        target_list.append(torch.rand(wav_len))         #[b, wav_len]
         frame_list.append((wav_len - win_size + win_size) // win_shift + 1)
     noisy_wav, target_wav = nn.utils.rnn.pad_sequence(noisy_list, batch_first=True), \
                             nn.utils.rnn.pad_sequence(target_list, batch_first=True)
-    noisy_wav = noisy_wav.transpose(-2, -1).contiguous().view(batch_size*mics, wav_len)
+    noisy_wav = noisy_wav.transpose(-2, -1).contiguous().view(batch_size*mics, wav_len) #[batch_size*mics, wav_len]
 
+    #[batch_size*mics, freq_num, seq_len, 2]    2是实复 
     noisy_stft = torch.stft(noisy_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(noisy_wav.device))
+    #[batch_size, freq_num, seq_len, 2]
     target_stft = torch.stft(target_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(target_wav.device))
     _, freq_num, seq_len, _ = noisy_stft.shape
     noisy_stft = noisy_stft.view(batch_size, mics, freq_num, seq_len, -1).permute(0, 3, 2, 1, 4).cuda()
@@ -750,14 +753,21 @@ def main(args, net):
     # conduct sqrt power-compression
     noisy_mag, noisy_phase = torch.norm(noisy_stft, dim=-1) ** 0.5, torch.atan2(noisy_stft[..., -1], noisy_stft[..., 0])
     target_mag, target_phase = torch.norm(target_stft, dim=1) ** 0.5, torch.atan2(target_stft[:, -1, ...], target_stft[:, 0, ...])
+    
+    #[batch_size, seq_len, freq_num, mics, 2]
     noisy_stft = torch.stack((noisy_mag * torch.cos(noisy_phase), noisy_mag * torch.sin(noisy_phase)), dim=-1).cuda()
+    #[batch_size, 2, seq_len, freq_num]
     target_stft = torch.stack((target_mag * torch.cos(target_phase), target_mag * torch.sin(target_phase)), dim=1).cuda()
 
-    esti_stft = net(noisy_stft)
+    
+    esti_stft = net(noisy_stft) #output: [batch_size, 2, seq_len, freq_num]
     print('input size:{} -> output size:{}, label size:{}'.format(noisy_stft.shape, esti_stft.shape, target_stft.shape))
     loss = com_mag_mse_loss(esti_stft, target_stft, frame_list)
     print("Calculated loss value:{}".format(loss.item()))
-
+    '''
+    input size:torch.Size([4, 601, 161, 9, 2]) -> output size:torch.Size([4, 2, 601, 161]), label size:torch.Size([4, 2, 601, 161])
+    Calculated loss value:1.8990187644958496
+    '''
 
 if __name__ == '__main__':
     import argparse
@@ -807,6 +817,6 @@ if __name__ == '__main__':
                  ).cuda()
     net.eval()
     print("The number of trainable parameters is:{}".format(numParams(net)))
-    from ptflops.flops_counter import get_model_complexity_info
-    get_model_complexity_info(net, (101, 161, 9, 2))
-    #main(args, net)
+    #from ptflops.flops_counter import get_model_complexity_info
+    #get_model_complexity_info(net, (101, 161, 9, 2))
+    main(args, net)
