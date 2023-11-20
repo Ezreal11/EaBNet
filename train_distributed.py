@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-import os
 import torch.nn as nn
 from torch.autograd import Variable
 from torch import Tensor
@@ -8,16 +7,18 @@ from torchvision import transforms
 import torch.utils.data as utils
 import pickle
 
-import tqdm
+import tqdm, os
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+import torch.distributed.launch as launch
 
 from EaBNet import EaBNet, numParams, com_mag_mse_loss
 from dataset.custom_dataset import CustomAudioVisualDataset
 from torch.utils.tensorboard import SummaryWriter
-#from torch.utils.tensorboard import SummaryWriter
 
 def load_dataset(args):
     #LOAD DATASET
-    print ('\nLoading dataset')
+    print ('Loading dataset')
 
     with open(args.training_predictors_path, 'rb') as f:
         training_audio_predictors = pickle.load(f)
@@ -70,12 +71,24 @@ def load_dataset(args):
     #test_dataset = CustomAudioVisualDataset((test_audio_predictors,test_img_predictors), test_target, args.path_images, args.path_csv_images_test, transform)
     
     #build data loader from dataset
-    tr_data = utils.DataLoader(tr_dataset, args.batch_size, shuffle=True, pin_memory=True)
+    #tr_data = utils.DataLoader(tr_dataset, args.batch_size, shuffle=True, pin_memory=True)
     #val_data = utils.DataLoader(val_dataset, args.batch_size, shuffle=False, pin_memory=True)
     #test_data = utils.DataLoader(test_dataset, args.batch_size, shuffle=False, pin_memory=True)
-    return tr_data  #, val_data, test_data
+    return tr_dataset  #, val_data, test_data
 
-def main(args):
+def _get_free_port():
+  import socketserver
+  with socketserver.TCPServer(('localhost', 0), None) as s:
+    return s.server_address[1]
+
+def main(rank, world_size, port, args):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = str(port)
+    # 初始化进程组
+    torch.distributed.init_process_group('nccl', rank=rank, world_size=world_size)
+    # 设置设备
+    device = torch.device('cuda:{}'.format(rank))
+    device = torch.device('cpu')
     if args.fixed_seed:
         seed = 1
         np.random.seed(seed)
@@ -101,68 +114,71 @@ def main(args):
                  topo_type=args.topo_type,
                  intra_connect=args.intra_connect,
                  norm_type=args.norm_type,
-                 )#.cuda()
+                 ).to(device)
+    
+    #model = DDP(model, device_ids=[device])
+    
     net.train()
     print("The number of trainable parameters is:{}".format(numParams(net)))
-    from ptflops.flops_counter import get_model_complexity_info
-    #get_model_complexity_info(net, (101, 161, 9, 2))
+
 
     batch_size = args.batch_size
-    mics = args.mics
+    mics = 4#args.mics
     sr = args.sr
     wav_len = int(args.wav_len * sr)
     win_size = int(args.win_size * sr)
     win_shift = int(args.win_shift * sr)
     fft_num = args.fft_num
-    dataloader = torch.utils.data.DataLoader(
-        dataset=torch.randn(args.batch_size, wav_len, args.mics),
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=0,
-        drop_last=False,
-        pin_memory=True,
-    )
 
-    dataloader = load_dataset(args)
+    #dataset and dataloader
+    tr_dataset = load_dataset(args)
+    dataloader = utils.DataLoader(tr_dataset, args.batch_size, sampler=DistributedSampler(tr_dataset, num_replicas=world_size, rank=rank))
+    
 
-    loss = nn.L1Loss()
+    #loss and optimizer
+    #loss = nn.L1Loss()
     optimizer = torch.optim.Adam(net.parameters(), lr=5e-4)
 
     #training loop
+    print('pid:', rank)
     for epoch in range(args.total_epoch):
-        
+        #for i, x in enumerate(dataloader):
         for i, (x, target) in enumerate(dataloader):
             current_iter = epoch * len(dataloader) + i
+            #print('pid:',rank,"x:",x)
 
             optimizer.zero_grad()
-            noisy_wav = x.cuda()    #[4, 4, 76672]
+            noisy_wav = x.to(device)    #[4, 4, 76672]
             #target_wav = torch.rand(args.batch_size, wav_len).cuda()
-            target_wav = target.cuda()  #[4, 1, 76672]
-            noisy_wav = noisy_wav.transpose(-2, -1).contiguous().view(batch_size*mics, wav_len) #[batch_size*mics, wav_len]
-            
+            target_wav = target.to(device)  #[4, 1, 76672]
+            noisy_wav = noisy_wav.contiguous().view(batch_size*mics, -1)#noisy_wav.shape[-1]) #[batch_size*mics, wav_len]
+            target_wav = target.squeeze(1)
             noisy_stft = torch.stft(noisy_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(noisy_wav.device))
             target_stft = torch.stft(target_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(target_wav.device))
             _, freq_num, seq_len, _ = noisy_stft.shape
-            noisy_stft = noisy_stft.view(batch_size, mics, freq_num, seq_len, -1).permute(0, 3, 2, 1, 4).cuda()
-            target_stft = target_stft.permute(0, 3, 2, 1).cuda()
+            noisy_stft = noisy_stft.view(batch_size, mics, freq_num, seq_len, -1).permute(0, 3, 2, 1, 4).to(device)
+            target_stft = target_stft.permute(0, 3, 2, 1).to(device)
             # conduct sqrt power-compression
             noisy_mag, noisy_phase = torch.norm(noisy_stft, dim=-1) ** 0.5, torch.atan2(noisy_stft[..., -1], noisy_stft[..., 0])
             target_mag, target_phase = torch.norm(target_stft, dim=1) ** 0.5, torch.atan2(target_stft[:, -1, ...], target_stft[:, 0, ...])
-            noisy_stft = torch.stack((noisy_mag * torch.cos(noisy_phase), noisy_mag * torch.sin(noisy_phase)), dim=-1).cuda()
-            target_stft = torch.stack((target_mag * torch.cos(target_phase), target_mag * torch.sin(target_phase)), dim=1).cuda()
+            noisy_stft = torch.stack((noisy_mag * torch.cos(noisy_phase), noisy_mag * torch.sin(noisy_phase)), dim=-1).to(device)
+            target_stft = torch.stack((target_mag * torch.cos(target_phase), target_mag * torch.sin(target_phase)), dim=1).to(device)
 
-            esti_stft = net(noisy_stft)
-            
+            #esti_stft = net(noisy_stft)
+            esti_stft = target_stft
+
             #calculate loss
-            #l = com_mag_mse_loss(esti_stft, target_stft, frame_list)
-            l = loss(esti_stft, target_stft)
-            print('loss:', l.item())
-            l.backward()
+            #l = loss(esti_stft, target_stft)
+            frame_list = [(wav_len - win_size + win_size) // win_shift + 1]*args.batch_size
+            frame_list.append((wav_len - win_size + win_size) // win_shift + 1)
+            loss = com_mag_mse_loss(esti_stft, target_stft, frame_list)
+            print('loss:', loss.item())
+
+            loss.backward()
             optimizer.step()
 
             if current_iter % 100 == 0:
-                print('iter:', current_iter)
-                print('loss:', l.item())
+                print('iter:', current_iter, 'loss:', loss.item())
 
             print('input:', x.shape)
             print('noisy_wav:', noisy_wav.shape)
@@ -227,5 +243,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    main(args,os.environ['RANK'],int(os.environ['WORLD_SIZE']))
-    #看看rank怎么设置，launch.json
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    world_size = torch.cuda.device_count()
+    port = _get_free_port()
+    torch.multiprocessing.spawn(main, args=(world_size, port, args, ), nprocs=world_size)
+    #main(args)

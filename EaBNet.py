@@ -592,6 +592,7 @@ class Chomp_T(nn.Module):
         return x[:, :, :-self.t, :]
 
 
+#FIXME:frame_list是什么？
 def com_mag_mse_loss(esti, label, frame_list):
     mask_for_loss = []
     utt_num = esti.size()[0]
