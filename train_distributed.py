@@ -1,16 +1,13 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.autograd import Variable
-from torch import Tensor
 from torchvision import transforms
 import torch.utils.data as utils
 import pickle
-
-import tqdm, os
+from tqdm import tqdm
+import os, glob
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
-import torch.distributed.launch as launch
 
 from EaBNet import EaBNet, numParams, com_mag_mse_loss
 from dataset.custom_dataset import CustomAudioVisualDataset
@@ -81,14 +78,44 @@ def _get_free_port():
   with socketserver.TCPServer(('localhost', 0), None) as s:
     return s.server_address[1]
 
+def save_checkpoint(model, optimizer, iteration, filepath):
+    folder = os.path.dirname(filepath)
+    if not os.path.exists(folder):
+        print('maybe useless cuz tensorboard create it ahead, but if not:')
+        os.makedirs(folder)
+
+    if isinstance(model, DDP):
+        model = model.module 
+    checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'iteration': iteration
+    }
+    torch.save(checkpoint, filepath)
+    print(f"Checkpoint saved at '{filepath}'")
+
+def load_checkpoint(model, optimizer, filepath):
+    if not os.path.exists(filepath):
+        print(f"Checkpoint '{filepath}' not found")
+        return -1
+    checkpoint = torch.load(filepath)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    iteration = checkpoint['iteration']
+    print(f"Checkpoint loaded from '{filepath}', start from iteration {iteration}")
+    return iteration
+
 def main(rank, world_size, port, args):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = str(port)
+    is_master = (rank == 0)
+    #writer = SummaryWriter(args.checkpoint_dir)
+    writer = None
     # 初始化进程组
     torch.distributed.init_process_group('nccl', rank=rank, world_size=world_size)
     # 设置设备
     device = torch.device('cuda:{}'.format(rank))
-    device = torch.device('cpu')
+
     if args.fixed_seed:
         seed = 1
         np.random.seed(seed)
@@ -116,14 +143,25 @@ def main(rank, world_size, port, args):
                  norm_type=args.norm_type,
                  ).to(device)
     
-    #model = DDP(model, device_ids=[device])
-    
+    #loss and optimizer
+    loss = nn.L1Loss()
+    optimizer = torch.optim.Adam(net.parameters(), lr=5e-4)
+
+    #resume from checkpoint
+    current_iter = 0
+    cplist = glob.glob(f"{args.checkpoint_dir}/*.pth")
+    if len(cplist) > 0:
+        resume_iter = load_checkpoint(net, optimizer, cplist[-1])
+        if resume_iter != -1:
+            current_iter = resume_iter + 1
+
+    net = DDP(net, device_ids=[device])
     net.train()
     print("The number of trainable parameters is:{}".format(numParams(net)))
 
 
     batch_size = args.batch_size
-    mics = 4#args.mics
+    mics = args.mics
     sr = args.sr
     wav_len = int(args.wav_len * sr)
     win_size = int(args.win_size * sr)
@@ -131,22 +169,21 @@ def main(rank, world_size, port, args):
     fft_num = args.fft_num
 
     #dataset and dataloader
-    tr_dataset = load_dataset(args)
+    tr_dataset = load_dataset(args)     #FIXME: 两个进程就超内存了wtf
     dataloader = utils.DataLoader(tr_dataset, args.batch_size, sampler=DistributedSampler(tr_dataset, num_replicas=world_size, rank=rank))
     
-
-    #loss and optimizer
-    #loss = nn.L1Loss()
-    optimizer = torch.optim.Adam(net.parameters(), lr=5e-4)
-
+    loss_list = []
     #training loop
     print('pid:', rank)
     for epoch in range(args.total_epoch):
         #for i, x in enumerate(dataloader):
-        for i, (x, target) in enumerate(dataloader):
-            current_iter = epoch * len(dataloader) + i
+        for i, (x, target) in enumerate(tqdm(dataloader)):
+            #current_iter = epoch * len(dataloader) + i
             #print('pid:',rank,"x:",x)
-
+            #x:[4, 4, 76672]
+            #FIXME:临时cat4声道到9声道
+            x = torch.cat((x, x), dim=1)
+            x = torch.cat((x, x[:, 0:1, :]), dim=1) #[4, 9, 76672]
             optimizer.zero_grad()
             noisy_wav = x.to(device)    #[4, 4, 76672]
             #target_wav = torch.rand(args.batch_size, wav_len).cuda()
@@ -164,29 +201,38 @@ def main(rank, world_size, port, args):
             noisy_stft = torch.stack((noisy_mag * torch.cos(noisy_phase), noisy_mag * torch.sin(noisy_phase)), dim=-1).to(device)
             target_stft = torch.stack((target_mag * torch.cos(target_phase), target_mag * torch.sin(target_phase)), dim=1).to(device)
 
-            #esti_stft = net(noisy_stft)
-            esti_stft = target_stft
+            #[4, 480, 161, 4/9, 2]
+            esti_stft = net(noisy_stft)
+            #esti_stft = target_stft
 
             #calculate loss
             #l = loss(esti_stft, target_stft)
-            frame_list = [(wav_len - win_size + win_size) // win_shift + 1]*args.batch_size
-            frame_list.append((wav_len - win_size + win_size) // win_shift + 1)
-            loss = com_mag_mse_loss(esti_stft, target_stft, frame_list)
-            print('loss:', loss.item())
+            frame_list = [noisy_stft.shape[1]] * args.batch_size
+            #frame_list = [(wav_len - win_size + win_size) // win_shift + 1]*args.batch_size
+            
+            l = com_mag_mse_loss(esti_stft, target_stft, frame_list)
+            #l = loss(esti_stft, target_stft)
+            #print('loss:', l.item())
 
-            loss.backward()
+            l.backward()
             optimizer.step()
 
-            if current_iter % 100 == 0:
-                print('iter:', current_iter, 'loss:', loss.item())
+            loss_list.append(l.item())
 
-            print('input:', x.shape)
-            print('noisy_wav:', noisy_wav.shape)
-            print('noisy_stft:', noisy_stft.shape)
-            print('esti_stft:', esti_stft.shape)
-            print('target_stft:', target_stft.shape)
-            break
-        break
+            if is_master:
+                if current_iter % 50 == 0:
+                    writer = writer or SummaryWriter(args.checkpoint_dir)   #lazy write
+                    mean_loss = sum(loss_list)/len(loss_list)
+                    print('iter:', current_iter, 'mean_loss:', mean_loss)
+                    writer.add_scalar('loss', mean_loss, current_iter)
+                    loss_list = []
+                if current_iter + 1 % len(dataloader) == 0:
+                    save_checkpoint(net, optimizer, current_iter, os.path.join(args.checkpoint_dir, f'{current_iter}.pth'))
+
+            current_iter += 1
+        
+        #end of an epoch
+        print(f'end epoch {epoch}')
 
 if __name__ == '__main__':
     import argparse
@@ -228,11 +274,12 @@ if __name__ == '__main__':
     parser.add_argument('--test_predictors_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_predictors_test.pkl')
     parser.add_argument('--test_target_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_target_test.pkl')
     
-
     #saving parameters
-    parser.add_argument('--results_path', type=str, default='/data/wbh/l3das23/RESULTS/Task1',
+    from datetime import datetime
+    exptime = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+    parser.add_argument('--results_path', type=str, default=f'/data/wbh/l3das23/experiment/{exptime}/results',
                         help='Folder to write results dicts into')
-    parser.add_argument('--checkpoint_dir', type=str, default='/data/wbh/l3das23/RESULTS/Task1',
+    parser.add_argument('--checkpoint_dir', type=str, default=f'/data/wbh/l3das23/experiment/{exptime}/checkpoints',
                         help='Folder to write checkpoints into')
     parser.add_argument('--path_images', type=str, default=None,
                         help="Path to the folder containing all images of Task1. None when using the audio-only version")
@@ -242,6 +289,10 @@ if __name__ == '__main__':
                         help="Path to the CSV file for the couples (name_audio, name_photo)")
 
     args = parser.parse_args()
+
+    #specify the path to load checkpoints
+    #args.checkpoint_dir = '/data/wbh/l3das23/experiment/2023-11-21-17:11:56/checkpoints/'
+    #args.results_path = '/data/wbh/l3das23/experiment/2023-11-21-17:11:56/results/'
 
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     world_size = torch.cuda.device_count()

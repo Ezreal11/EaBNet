@@ -93,7 +93,7 @@ class EaBNet(nn.Module):
         b_size, seq_len, freq_len, M, _ = inpt.shape
         x = inpt.transpose(-2, -1).contiguous()
         x = x.view(b_size, seq_len, freq_len, -1).permute(0,3,1,2)
-        x, en_list = self.en(x)
+        x, en_list = self.en(x)     #FIXME:
         c = x.shape[1]
         x = x.transpose(-2, -1).contiguous().view(b_size, -1, seq_len)
         x_acc = Variable(torch.zeros(x.size()), requires_grad=True).to(x.device)
@@ -603,7 +603,8 @@ def com_mag_mse_loss(esti, label, frame_list):
         mask_for_loss = nn.utils.rnn.pad_sequence(mask_for_loss, batch_first=True).to(esti.device)
         com_mask_for_loss = torch.stack((mask_for_loss, mask_for_loss), dim=1)
     mag_esti, mag_label = torch.norm(esti, dim=1), torch.norm(label, dim=1)
-    loss1 = (((mag_esti - mag_label) ** 2.0) * mask_for_loss).sum() / mask_for_loss.sum()
+    #mag:[4, 480, 161] 
+    loss1 = (((mag_esti - mag_label) ** 2.0) * mask_for_loss).sum() / mask_for_loss.sum()       #FIXME: 
     loss2 = (((esti - label)**2.0)*com_mask_for_loss).sum() / com_mask_for_loss.sum()
     return 0.5*(loss1 + loss2)
 
@@ -760,7 +761,7 @@ def main(args, net):
     #[batch_size, 2, seq_len, freq_num]
     target_stft = torch.stack((target_mag * torch.cos(target_phase), target_mag * torch.sin(target_phase)), dim=1).cuda()
 
-    
+    #[4, 601, 161, 9, 2]
     esti_stft = net(noisy_stft) #output: [batch_size, 2, seq_len, freq_num]
     print('input size:{} -> output size:{}, label size:{}'.format(noisy_stft.shape, esti_stft.shape, target_stft.shape))
     loss = com_mag_mse_loss(esti_stft, target_stft, frame_list)
