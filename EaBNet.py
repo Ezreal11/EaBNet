@@ -93,7 +93,7 @@ class EaBNet(nn.Module):
         b_size, seq_len, freq_len, M, _ = inpt.shape
         x = inpt.transpose(-2, -1).contiguous()
         x = x.view(b_size, seq_len, freq_len, -1).permute(0,3,1,2)
-        x, en_list = self.en(x)     #FIXME:
+        x, en_list = self.en(x) 
         c = x.shape[1]
         x = x.transpose(-2, -1).contiguous().view(b_size, -1, seq_len)
         x_acc = Variable(torch.zeros(x.size()), requires_grad=True).to(x.device)
@@ -592,7 +592,6 @@ class Chomp_T(nn.Module):
         return x[:, :, :-self.t, :]
 
 
-#FIXME:frame_list是什么？
 def com_mag_mse_loss(esti, label, frame_list):
     mask_for_loss = []
     utt_num = esti.size()[0]
@@ -604,7 +603,7 @@ def com_mag_mse_loss(esti, label, frame_list):
         com_mask_for_loss = torch.stack((mask_for_loss, mask_for_loss), dim=1)
     mag_esti, mag_label = torch.norm(esti, dim=1), torch.norm(label, dim=1)
     #mag:[4, 480, 161] 
-    loss1 = (((mag_esti - mag_label) ** 2.0) * mask_for_loss).sum() / mask_for_loss.sum()       #FIXME: 
+    loss1 = (((mag_esti - mag_label) ** 2.0) * mask_for_loss).sum() / mask_for_loss.sum()
     loss2 = (((esti - label)**2.0)*com_mask_for_loss).sum() / com_mask_for_loss.sum()
     return 0.5*(loss1 + loss2)
 

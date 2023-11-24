@@ -8,6 +8,7 @@ from tqdm import tqdm
 import os, glob
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
+import soundfile as sf
 
 from EaBNet import EaBNet, numParams, com_mag_mse_loss
 from dataset.custom_dataset import CustomAudioVisualDataset
@@ -21,11 +22,11 @@ def load_dataset(args):
         training_audio_predictors = pickle.load(f)
     with open(args.training_target_path, 'rb') as f:
         training_target = pickle.load(f)
-    '''with open(args.validation_predictors_path, 'rb') as f:
+    with open(args.validation_predictors_path, 'rb') as f:
         validation_audio_predictors = pickle.load(f)
     with open(args.validation_target_path, 'rb') as f:
         validation_target = pickle.load(f)
-    with open(args.test_predictors_path, 'rb') as f:
+    '''with open(args.test_predictors_path, 'rb') as f:
         test_predictors = pickle.load(f)
     with open(args.test_target_path, 'rb') as f:
         test_target = pickle.load(f)'''
@@ -33,25 +34,25 @@ def load_dataset(args):
     training_img_predictors = training_audio_predictors[1]
     training_audio_predictors = np.array(training_audio_predictors[0])
     training_target = np.array(training_target)
-    #validation_img_predictors = validation_audio_predictors[1]
-    #validation_audio_predictors = np.array(validation_audio_predictors[0])
-    # validation_img_predictors = validation_predictors[1]
-    #validation_target = np.array(validation_target)
+    validation_img_predictors = validation_audio_predictors[1]
+    validation_audio_predictors = np.array(validation_audio_predictors[0])
+    #validation_img_predictors = validation_predictors[1]
+    validation_target = np.array(validation_target)
     #test_audio_predictors = np.array(test_predictors[0])
     #test_img_predictors = test_predictors[1]
     #test_target = np.array(test_target)
 
     print ('\nShapes:')
     print ('Training predictors: ', training_audio_predictors.shape)
-    #print ('Validation predictors: ', validation_audio_predictors.shape)
+    print ('Validation predictors: ', validation_audio_predictors.shape)
     #print ('Test predictors: ', test_audio_predictors.shape)
 
     #convert to tensor
     training_audio_predictors = torch.tensor(training_audio_predictors).float()
-    #validation_audio_predictors = torch.tensor(validation_audio_predictors).float()
+    validation_audio_predictors = torch.tensor(validation_audio_predictors).float()
     #test_audio_predictors = torch.tensor(test_audio_predictors).float()
     training_target = torch.tensor(training_target).float()
-    #validation_target = torch.tensor(validation_target).float()
+    validation_target = torch.tensor(validation_target).float()
     #test_target = torch.tensor(test_target).float()
     
     #build dataset from tensors
@@ -64,14 +65,14 @@ def load_dataset(args):
     ])
 
     tr_dataset = CustomAudioVisualDataset((training_audio_predictors, training_img_predictors), training_target, args.path_images, args.path_csv_images_train, transform)
-    #val_dataset = CustomAudioVisualDataset((validation_audio_predictors,validation_img_predictors), validation_target, args.path_images, args.path_csv_images_train, transform)
+    val_dataset = CustomAudioVisualDataset((validation_audio_predictors,validation_img_predictors), validation_target, args.path_images, args.path_csv_images_train, transform)
     #test_dataset = CustomAudioVisualDataset((test_audio_predictors,test_img_predictors), test_target, args.path_images, args.path_csv_images_test, transform)
     
     #build data loader from dataset
     #tr_data = utils.DataLoader(tr_dataset, args.batch_size, shuffle=True, pin_memory=True)
     #val_data = utils.DataLoader(val_dataset, args.batch_size, shuffle=False, pin_memory=True)
     #test_data = utils.DataLoader(test_dataset, args.batch_size, shuffle=False, pin_memory=True)
-    return tr_dataset  #, val_data, test_data
+    return tr_dataset, val_dataset#, test_data
 
 def _get_free_port():
   import socketserver
@@ -103,7 +104,81 @@ def load_checkpoint(model, optimizer, filepath):
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     iteration = checkpoint['iteration']
     print(f"Checkpoint loaded from '{filepath}', start from iteration {iteration}")
-    return iteration
+    
+    return model, optimizer, iteration
+
+def prepare_data(x, target, device, args):
+    batch_size = x.shape[0]
+    mics = args.mics
+    sr = args.sr
+    wav_len = int(args.wav_len * sr)
+    win_size = int(args.win_size * sr)
+    win_shift = int(args.win_shift * sr)
+    fft_num = args.fft_num
+
+    noisy_wav = x.to(device)    #[4, 4, 76672]
+    #target_wav = torch.rand(args.batch_size, wav_len).cuda()
+    target_wav = target.to(device)  #[4, 1, 76672]
+    noisy_wav = noisy_wav.contiguous().view(batch_size*mics, -1)#noisy_wav.shape[-1]) #[batch_size*mics, wav_len]
+    target_wav = target.squeeze(1)
+    #[batch_size*mics, freq_num, seq_len, 2]
+    noisy_stft = torch.stft(noisy_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(noisy_wav.device))
+    target_stft = torch.stft(target_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(target_wav.device))
+    _, freq_num, seq_len, _ = noisy_stft.shape
+    noisy_stft = noisy_stft.view(batch_size, mics, freq_num, seq_len, -1).permute(0, 3, 2, 1, 4).to(device)
+    target_stft = target_stft.permute(0, 3, 2, 1).to(device)
+    # conduct sqrt power-compression
+    noisy_mag, noisy_phase = torch.norm(noisy_stft, dim=-1) ** 0.5, torch.atan2(noisy_stft[..., -1], noisy_stft[..., 0])
+    target_mag, target_phase = torch.norm(target_stft, dim=1) ** 0.5, torch.atan2(target_stft[:, -1, ...], target_stft[:, 0, ...])
+    noisy_stft = torch.stack((noisy_mag * torch.cos(noisy_phase), noisy_mag * torch.sin(noisy_phase)), dim=-1).to(device)
+    target_stft = torch.stack((target_mag * torch.cos(target_phase), target_mag * torch.sin(target_phase)), dim=1).to(device)
+    
+    #noisy: [4, 601, 161, 9, 2]
+    return noisy_stft, target_stft
+ 
+def evaluate(is_master, model, device, criterion, valloader, iter, writer, args):
+    model.eval()
+    loss_list = []
+    with torch.no_grad():
+        for i, (x, target) in enumerate(tqdm(valloader,desc=f'Valid:')):
+            target = target.to(device)
+            x = x.to(device)
+            noisy_stft, target_stft = prepare_data(x, target, device, args)
+            esti_stft = model(noisy_stft)
+            #loss = criterion(esti_stft, target_stft)
+            frame_list = [noisy_stft.shape[1]] * x.shape[0]
+            loss = com_mag_mse_loss(esti_stft, target_stft, frame_list)
+            torch.distributed.all_reduce(loss)
+            loss_list.append(loss.item()/torch.distributed.get_world_size())
+
+            '''if i == 0:
+                #save an example
+                sr = args.sr
+                wav_len = int(args.wav_len * sr)
+                win_size = int(args.win_size * sr)
+                win_shift = int(args.win_shift * sr)
+                fft_num = args.fft_num
+                esti_wav = torch.istft(esti_stft, fft_num, win_shift, win_size, torch.hann_window(win_size).to(device))
+                esti_wav = esti_wav.squeeze(0).cpu().numpy()
+                noisy_wav = x.squeeze(0).cpu().numpy()
+                target_wav = target.squeeze(0).cpu().numpy()
+
+                writer.add_audio('estimated_audio', esti_wav, iter, args.sr)
+                writer.add_audio('noisy_audio', noisy_wav, iter, args.sr)
+                writer.add_audio('target_audio', target_wav, iter, args.sr)
+
+                writer.add_image('estimated_spectrogram', esti_stft, iter)
+                writer.add_image('noisy_spectrogram', x.squeeze(0), iter)
+                writer.add_image('target_spectrogram', target.squeeze(0), iter)'''
+                
+
+    mean_loss = sum(loss_list)/len(loss_list)
+    if is_master:    
+        print('test_loss:', mean_loss)
+        writer.add_scalar('valid_loss', mean_loss, iter)
+
+    model.train()
+    #return test_loss
 
 def main(rank, world_size, port, args):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -151,97 +226,79 @@ def main(rank, world_size, port, args):
     current_iter = 0
     cplist = glob.glob(f"{args.checkpoint_dir}/*.pth")
     if len(cplist) > 0:
-        resume_iter = load_checkpoint(net, optimizer, cplist[-1])
+        paths = [int(os.path.basename(path).split('.')[0]) for path in cplist]
+        checkpoint_path = cplist[paths.index(max(paths))]
+        net, optimizer, resume_iter = load_checkpoint(net, optimizer, checkpoint_path)  
         if resume_iter != -1:
             current_iter = resume_iter + 1
 
     net = DDP(net, device_ids=[device])
     net.train()
-    print("The number of trainable parameters is:{}".format(numParams(net)))
-
-
-    batch_size = args.batch_size
-    mics = args.mics
-    sr = args.sr
-    wav_len = int(args.wav_len * sr)
-    win_size = int(args.win_size * sr)
-    win_shift = int(args.win_shift * sr)
-    fft_num = args.fft_num
+    #print("The number of trainable parameters is:{}".format(numParams(net)))
 
     #dataset and dataloader
-    tr_dataset = load_dataset(args)     #FIXME: 两个进程就超内存了wtf
-    dataloader = utils.DataLoader(tr_dataset, args.batch_size, sampler=DistributedSampler(tr_dataset, num_replicas=world_size, rank=rank))
+    tr_dataset, val_dataset = load_dataset(args)     #FIXME: 两个进程就超内存了wtf
+    trainloader = utils.DataLoader(tr_dataset, args.batch_size, drop_last= True, sampler=DistributedSampler(tr_dataset, num_replicas=world_size, rank=rank))
+    valloader = utils.DataLoader(val_dataset, 1, sampler=DistributedSampler(val_dataset, num_replicas=world_size, rank=rank))
+
+    
+    #-------------------------training loop-------------------------
+    print('pid:', rank)
+    #evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
     
     loss_list = []
-    #training loop
-    print('pid:', rank)
     for epoch in range(args.total_epoch):
         #for i, x in enumerate(dataloader):
-        for i, (x, target) in enumerate(tqdm(dataloader)):
-            #current_iter = epoch * len(dataloader) + i
-            #print('pid:',rank,"x:",x)
-            #x:[4, 4, 76672]
-            #FIXME:临时cat4声道到9声道
-            x = torch.cat((x, x), dim=1)
-            x = torch.cat((x, x[:, 0:1, :]), dim=1) #[4, 9, 76672]
+        for i, (x, target) in enumerate(tqdm(trainloader,desc=f'Epoch:{epoch}')):
+            #临时cat4声道到9声道
+            #x = torch.cat((x, x), dim=1)
+            #x = torch.cat((x, x[:, 0:1, :]), dim=1) #[4, 9, 76672]
+            
             optimizer.zero_grad()
-            noisy_wav = x.to(device)    #[4, 4, 76672]
-            #target_wav = torch.rand(args.batch_size, wav_len).cuda()
-            target_wav = target.to(device)  #[4, 1, 76672]
-            noisy_wav = noisy_wav.contiguous().view(batch_size*mics, -1)#noisy_wav.shape[-1]) #[batch_size*mics, wav_len]
-            target_wav = target.squeeze(1)
-            noisy_stft = torch.stft(noisy_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(noisy_wav.device))
-            target_stft = torch.stft(target_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(target_wav.device))
-            _, freq_num, seq_len, _ = noisy_stft.shape
-            noisy_stft = noisy_stft.view(batch_size, mics, freq_num, seq_len, -1).permute(0, 3, 2, 1, 4).to(device)
-            target_stft = target_stft.permute(0, 3, 2, 1).to(device)
-            # conduct sqrt power-compression
-            noisy_mag, noisy_phase = torch.norm(noisy_stft, dim=-1) ** 0.5, torch.atan2(noisy_stft[..., -1], noisy_stft[..., 0])
-            target_mag, target_phase = torch.norm(target_stft, dim=1) ** 0.5, torch.atan2(target_stft[:, -1, ...], target_stft[:, 0, ...])
-            noisy_stft = torch.stack((noisy_mag * torch.cos(noisy_phase), noisy_mag * torch.sin(noisy_phase)), dim=-1).to(device)
-            target_stft = torch.stack((target_mag * torch.cos(target_phase), target_mag * torch.sin(target_phase)), dim=1).to(device)
+            noisy_stft, target_stft = prepare_data(x, target, device, args)
 
             #[4, 480, 161, 4/9, 2]
             esti_stft = net(noisy_stft)
-            #esti_stft = target_stft
 
             #calculate loss
-            #l = loss(esti_stft, target_stft)
             frame_list = [noisy_stft.shape[1]] * args.batch_size
-            #frame_list = [(wav_len - win_size + win_size) // win_shift + 1]*args.batch_size
-            
             l = com_mag_mse_loss(esti_stft, target_stft, frame_list)
-            #l = loss(esti_stft, target_stft)
-            #print('loss:', l.item())
-
             l.backward()
             optimizer.step()
 
             loss_list.append(l.item())
-
             if is_master:
                 if current_iter % 50 == 0:
                     writer = writer or SummaryWriter(args.checkpoint_dir)   #lazy write
                     mean_loss = sum(loss_list)/len(loss_list)
-                    print('iter:', current_iter, 'mean_loss:', mean_loss)
                     writer.add_scalar('loss', mean_loss, current_iter)
                     loss_list = []
-                if current_iter + 1 % len(dataloader) == 0:
-                    save_checkpoint(net, optimizer, current_iter, os.path.join(args.checkpoint_dir, f'{current_iter}.pth'))
+                
+                
 
             current_iter += 1
         
-        #end of an epoch
+        #-------------------------end of an epoch-------------------------
         print(f'end epoch {epoch}')
+        #save checkpoint
+        if is_master and (epoch % args.saving_interval == 0 or epoch == args.total_epoch - 1):
+            writer.add_scalar('loss', mean_loss, current_iter)
+            save_checkpoint(net, optimizer, current_iter, os.path.join(args.checkpoint_dir, f'{current_iter}.pth'))
+        #validation
+        if is_master and (epoch % args.valid_interval == 0 or epoch == args.total_epoch - 1):
+            evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
+            #write enhanced audio
+
+
 
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser("This script provides the network code and a simple testing, you can train the"
                                      "network according to your own pipeline")
     #eabnet parameters
-    parser.add_argument("--batch_size", type=int, default=4)
-    parser.add_argument("--total_epoch", type=int, default=100)
-    parser.add_argument("--mics", type=int, default=9)
+    parser.add_argument("--batch_size", type=int, default=6)    #8 in paper
+    parser.add_argument("--total_epoch", type=int, default=200)  #60 in paper
+    parser.add_argument("--mics", type=int, default=4)
     parser.add_argument("--sr", type=int, default=16000)
     parser.add_argument("--wav_len", type=float, default=6.0)
     parser.add_argument("--win_size", type=float, default=0.020)
@@ -250,7 +307,7 @@ if __name__ == '__main__':
     parser.add_argument("--k1", type=tuple, default=(2,3))
     parser.add_argument("--k2", type=tuple, default=(1,3))
     parser.add_argument("--c", type=int, default=64)
-    parser.add_argument("--M", type=int, default=9)
+    parser.add_argument("--M", type=int, default=4)
     parser.add_argument("--embed_dim", type=int, default=64)
     parser.add_argument("--kd1", type=int, default=5)
     parser.add_argument("--cd1", type=int, default=64)
@@ -264,6 +321,7 @@ if __name__ == '__main__':
     parser.add_argument("--intra_connect", type=str, default="cat", choices=["cat", "add"])
     parser.add_argument("--norm_type", type=str, default="IN", choices=["BN", "IN", "cLN"])
     parser.add_argument("--fixed_seed", type=bool, default=False, choices=[True, False])
+    parser.add_argument("--valid_interval", type=int, default=4)
 
     #dataset parameters     processed是4声道，processed1是8声道，但是加载时超内存
     processed_folder = 'processed'
@@ -277,6 +335,8 @@ if __name__ == '__main__':
     #saving parameters
     from datetime import datetime
     exptime = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+    #parser.add_argument('--expname', type=str, default='',
+    #                    help='Experiment name')
     parser.add_argument('--results_path', type=str, default=f'/data/wbh/l3das23/experiment/{exptime}/results',
                         help='Folder to write results dicts into')
     parser.add_argument('--checkpoint_dir', type=str, default=f'/data/wbh/l3das23/experiment/{exptime}/checkpoints',
@@ -287,12 +347,13 @@ if __name__ == '__main__':
                         help="Path to the CSV file for the couples (name_audio, name_photo) in the train/val set")
     parser.add_argument('--path_csv_images_test', type=str, default='/data/wbh/l3das23/L3DAS23_Task1_dev/audio_image.csv',
                         help="Path to the CSV file for the couples (name_audio, name_photo)")
+    parser.add_argument("--saving_interval", type=int, default=1)
 
     args = parser.parse_args()
 
     #specify the path to load checkpoints
-    #args.checkpoint_dir = '/data/wbh/l3das23/experiment/2023-11-21-17:11:56/checkpoints/'
-    #args.results_path = '/data/wbh/l3das23/experiment/2023-11-21-17:11:56/results/'
+    #args.checkpoint_dir = '/data/wbh/l3das23/experiment/2023-11-23-14:22:43/checkpoints/'
+    #args.results_path = '/data/wbh/l3das23/experiment/2023-11-23-14:22:43/results/'
 
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     world_size = torch.cuda.device_count()
