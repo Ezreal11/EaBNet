@@ -7,6 +7,7 @@ from torch import Tensor
 from torchvision import transforms
 import torch.utils.data as utils
 import pickle
+from dataset import make_dataset
 
 import tqdm
 
@@ -15,65 +16,7 @@ from dataset.custom_dataset import CustomAudioVisualDataset
 from torch.utils.tensorboard import SummaryWriter
 #from torch.utils.tensorboard import SummaryWriter
 
-def load_dataset(args):
-    #LOAD DATASET
-    print ('\nLoading dataset')
-
-    with open(args.training_predictors_path, 'rb') as f:
-        training_audio_predictors = pickle.load(f)
-    with open(args.training_target_path, 'rb') as f:
-        training_target = pickle.load(f)
-    '''with open(args.validation_predictors_path, 'rb') as f:
-        validation_audio_predictors = pickle.load(f)
-    with open(args.validation_target_path, 'rb') as f:
-        validation_target = pickle.load(f)
-    with open(args.test_predictors_path, 'rb') as f:
-        test_predictors = pickle.load(f)
-    with open(args.test_target_path, 'rb') as f:
-        test_target = pickle.load(f)'''
     
-    training_img_predictors = training_audio_predictors[1]
-    training_audio_predictors = np.array(training_audio_predictors[0])
-    training_target = np.array(training_target)
-    #validation_img_predictors = validation_audio_predictors[1]
-    #validation_audio_predictors = np.array(validation_audio_predictors[0])
-    # validation_img_predictors = validation_predictors[1]
-    #validation_target = np.array(validation_target)
-    #test_audio_predictors = np.array(test_predictors[0])
-    #test_img_predictors = test_predictors[1]
-    #test_target = np.array(test_target)
-
-    print ('\nShapes:')
-    print ('Training predictors: ', training_audio_predictors.shape)
-    #print ('Validation predictors: ', validation_audio_predictors.shape)
-    #print ('Test predictors: ', test_audio_predictors.shape)
-
-    #convert to tensor
-    training_audio_predictors = torch.tensor(training_audio_predictors).float()
-    #validation_audio_predictors = torch.tensor(validation_audio_predictors).float()
-    #test_audio_predictors = torch.tensor(test_audio_predictors).float()
-    training_target = torch.tensor(training_target).float()
-    #validation_target = torch.tensor(validation_target).float()
-    #test_target = torch.tensor(test_target).float()
-    
-    #build dataset from tensors
-    # tr_dataset = utils.TensorDataset(training_predictors, training_target)
-    # val_dataset = utils.TensorDataset(validation_predictors, validation_target)
-    # test_dataset = utils.TensorDataset(test_predictors, test_target)
-    
-    transform = transforms.Compose([  
-        transforms.ToTensor(),
-    ])
-
-    tr_dataset = CustomAudioVisualDataset((training_audio_predictors, training_img_predictors), training_target, args.path_images, args.path_csv_images_train, transform)
-    #val_dataset = CustomAudioVisualDataset((validation_audio_predictors,validation_img_predictors), validation_target, args.path_images, args.path_csv_images_train, transform)
-    #test_dataset = CustomAudioVisualDataset((test_audio_predictors,test_img_predictors), test_target, args.path_images, args.path_csv_images_test, transform)
-    
-    #build data loader from dataset
-    tr_data = utils.DataLoader(tr_dataset, args.batch_size, shuffle=True, pin_memory=True)
-    #val_data = utils.DataLoader(val_dataset, args.batch_size, shuffle=False, pin_memory=True)
-    #test_data = utils.DataLoader(test_dataset, args.batch_size, shuffle=False, pin_memory=True)
-    return tr_data  #, val_data, test_data
 
 def main(args):
     if args.fixed_seed:
@@ -123,7 +66,10 @@ def main(args):
         pin_memory=True,
     )
 
-    dataloader = load_dataset(args)
+    tr_dataset = make_dataset(args)
+    
+    #build data loader from dataset
+    dataloader = utils.DataLoader(tr_dataset, args.batch_size, shuffle=True, pin_memory=True)
 
     loss = nn.L1Loss()
     optimizer = torch.optim.Adam(net.parameters(), lr=5e-4)
@@ -211,6 +157,7 @@ if __name__ == '__main__':
     parser.add_argument('--validation_target_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_target_validation.pkl')
     parser.add_argument('--test_predictors_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_predictors_test.pkl')
     parser.add_argument('--test_target_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_target_test.pkl')
+    parser.add_argument('--dataset', type=str, default='l3das23', choices=['l3das23', 'mcse'])
     
 
     #saving parameters
