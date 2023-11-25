@@ -150,26 +150,31 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
             loss = com_mag_mse_loss(esti_stft, target_stft, frame_list)
             torch.distributed.all_reduce(loss)
             loss_list.append(loss.item()/torch.distributed.get_world_size())
-
-            '''if i == 0:
-                #save an example
+            
+            #save an example
+            if i == 0:
                 sr = args.sr
                 wav_len = int(args.wav_len * sr)
                 win_size = int(args.win_size * sr)
                 win_shift = int(args.win_shift * sr)
                 fft_num = args.fft_num
+                #esti_stft:[1, 2, 480, 161]  noisy_stft:[1, 480, 161, 4, 2]
+                #stft ouput:[batch_size*mics, freq_num(161), seq_len, 2] [batch_size, freq_num, seq_len, 2]
+                esti_stft, target_stft = esti_stft.permute(0, 3, 2, 1), target_stft.permute(0, 3, 2, 1)
                 esti_wav = torch.istft(esti_stft, fft_num, win_shift, win_size, torch.hann_window(win_size).to(device))
-                esti_wav = esti_wav.squeeze(0).cpu().numpy()
-                noisy_wav = x.squeeze(0).cpu().numpy()
-                target_wav = target.squeeze(0).cpu().numpy()
+                esti_wav = esti_wav.cpu().numpy()   #[1, 76640]
+                noisy_wav = x.squeeze(0).cpu().numpy()  #[4, 76672]
+                target_wav = target.squeeze(0).cpu().numpy()    #[1, 76672]
 
+                writer = writer or SummaryWriter(args.checkpoint_dir)
                 writer.add_audio('estimated_audio', esti_wav, iter, args.sr)
-                writer.add_audio('noisy_audio', noisy_wav, iter, args.sr)
+                writer.add_audio('noisy_audio', noisy_wav[:1,:], iter, args.sr)
                 writer.add_audio('target_audio', target_wav, iter, args.sr)
 
-                writer.add_image('estimated_spectrogram', esti_stft, iter)
-                writer.add_image('noisy_spectrogram', x.squeeze(0), iter)
-                writer.add_image('target_spectrogram', target.squeeze(0), iter)'''
+                #size of input tensor and input format are different.         tensor shape: (1, 161, 480, 2), input_format: CHW
+                writer.add_image('estimated_spectrogram', esti_stft[..., 0], iter)
+                writer.add_image('noisy_spectrogram', noisy_stft[..., 0, 0], iter)
+                writer.add_image('target_spectrogram', target_stft[..., 0], iter)
                 
 
     mean_loss = sum(loss_list)/len(loss_list)
@@ -274,8 +279,6 @@ def main(rank, world_size, port, args):
                     writer.add_scalar('loss', mean_loss, current_iter)
                     loss_list = []
                 
-                
-
             current_iter += 1
         
         #-------------------------end of an epoch-------------------------
@@ -354,7 +357,8 @@ if __name__ == '__main__':
     #specify the path to load checkpoints
     #args.checkpoint_dir = '/data/wbh/l3das23/experiment/2023-11-23-14:22:43/checkpoints/'
     #args.results_path = '/data/wbh/l3das23/experiment/2023-11-23-14:22:43/results/'
-
+    #args.checkpoint_dir = '/data/wbh/l3das23/experiment/debug/checkpoints/'
+    #args.results_path = '/data/wbh/l3das23/experiment/debug/results/'
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     world_size = torch.cuda.device_count()
     port = _get_free_port()

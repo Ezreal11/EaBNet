@@ -744,7 +744,7 @@ def main(args, net):
                             nn.utils.rnn.pad_sequence(target_list, batch_first=True)
     noisy_wav = noisy_wav.transpose(-2, -1).contiguous().view(batch_size*mics, wav_len) #[batch_size*mics, wav_len]
 
-    #[batch_size*mics, freq_num, seq_len, 2]    2是实复 
+    #[batch_size*mics, freq_num, seq_len, 2] [36, 161, 601, 2]   2是实复 
     noisy_stft = torch.stft(noisy_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(noisy_wav.device))
     #[batch_size, freq_num, seq_len, 2]
     target_stft = torch.stft(target_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(target_wav.device))
