@@ -206,7 +206,7 @@ class McseDatasetForTrain(data.Dataset):
             )
         clean = sample['clean']
         noisy = sample['noisy']
-        return torch.tensor(clean), torch.tensor(noisy)
+        return torch.tensor(noisy), torch.tensor(clean).reshape(1,-1)
 
 
 class McseDatasetForVal(data.Dataset):
@@ -225,7 +225,7 @@ class McseDatasetForVal(data.Dataset):
         noisy_path = os.path.join(self.noisy_root, sample)
         clean, _ = torchaudio.load(clean_path)
         noisy, _ = torchaudio.load(noisy_path)
-        return clean, noisy
+        return noisy, clean
         
 def make_mcse_dataset(args):
     pass
