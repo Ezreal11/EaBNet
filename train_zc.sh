@@ -4,24 +4,30 @@ if [ "$1" == "" ]; then
 fi
 exp_root=/data2/zhouchang/experiments/eabnet/$1
 if [ -d "$exp_root" ]; then
-    read -p "$exp_root already exists. delete it? (y/n):" response
+
+    read -p "continue training? (y/n):" response
 
     if [[ $response == "y" ]]; then
-        rm -rf $exp_root
-        echo delete dir $exp_root
+        echo ok
     else
-        echo bye
-        exit 1
+        read -p "$exp_root already exists. delete it? (y/n):" response
+        if [[ $response == "y" ]]; then
+            rm -rf $exp_root
+            echo delete dir $exp_root
+            mkdir -p $exp_root
+            echo create dir $exp_root
+        else
+            echo bye
+            exit 1
+        fi
     fi
 fi
 
-mkdir -p $exp_root
-echo create dir $exp_root
 
 CUDA_VISIBLE_DEVICES=2 python train_distributed.py \
  --dataset mcse \
  --batch_size 8 \
- --num_workers 24 \
+ --num_workers 32 \
  --mics 8 \
  --M 8 \
  --results_path "$exp_root/results" \

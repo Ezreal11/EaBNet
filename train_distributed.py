@@ -104,7 +104,8 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
                 #esti_stft:[1, 2, 480, 161]  noisy_stft:[1, 480, 161, 4, 2]
                 #stft ouput:[batch_size*mics, freq_num(161), seq_len, 2] [batch_size, freq_num, seq_len, 2]
                 esti_stft, target_stft = esti_stft.permute(0, 3, 2, 1), target_stft.permute(0, 3, 2, 1)
-                esti_wav = torch.istft(esti_stft, fft_num, win_shift, win_size, torch.hann_window(win_size).to(device))
+                print(esti_stft.shape)
+                esti_wav = torch.istft(torch.view_as_complex(esti_stft.contiguous()), fft_num, win_shift, win_size, torch.hann_window(win_size).to(device))
                 esti_wav = esti_wav.cpu().numpy()   #[1, 76640]
                 noisy_wav = x.squeeze(0).cpu().numpy()  #[4, 76672]
                 target_wav = target.squeeze(0).cpu().numpy()    #[1, 76672]
@@ -195,6 +196,11 @@ def main(rank, world_size, port, args):
     print('pid:', rank)
     #evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)  #for debug
     
+    #validation
+    if is_master and args.validate_once_before_train:
+        evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
+        #write enhanced audio
+
     loss_list = []
     for epoch in range(args.total_epoch):
         #for i, x in enumerate(dataloader):
@@ -297,6 +303,7 @@ if __name__ == '__main__':
     parser.add_argument('--path_csv_images_test', type=str, default='/data/wbh/l3das23/L3DAS23_Task1_dev/audio_image.csv',
                         help="Path to the CSV file for the couples (name_audio, name_photo)")
     parser.add_argument("--saving_interval", type=int, default=1)
+    parser.add_argument('--validate_once_before_train', action='store_true', default=False)
 
     args = parser.parse_args()
 
