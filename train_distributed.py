@@ -9,70 +9,12 @@ import os, glob
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import soundfile as sf
+from dataset import make_dataset
 
 from EaBNet import EaBNet, numParams, com_mag_mse_loss
 from dataset.custom_dataset import CustomAudioVisualDataset
 from torch.utils.tensorboard import SummaryWriter
 
-def load_dataset(args):
-    #LOAD DATASET
-    print ('Loading dataset')
-
-    with open(args.training_predictors_path, 'rb') as f:
-        training_audio_predictors = pickle.load(f)
-    with open(args.training_target_path, 'rb') as f:
-        training_target = pickle.load(f)
-    with open(args.validation_predictors_path, 'rb') as f:
-        validation_audio_predictors = pickle.load(f)
-    with open(args.validation_target_path, 'rb') as f:
-        validation_target = pickle.load(f)
-    '''with open(args.test_predictors_path, 'rb') as f:
-        test_predictors = pickle.load(f)
-    with open(args.test_target_path, 'rb') as f:
-        test_target = pickle.load(f)'''
-    
-    training_img_predictors = training_audio_predictors[1]
-    training_audio_predictors = np.array(training_audio_predictors[0])
-    training_target = np.array(training_target)
-    validation_img_predictors = validation_audio_predictors[1]
-    validation_audio_predictors = np.array(validation_audio_predictors[0])
-    #validation_img_predictors = validation_predictors[1]
-    validation_target = np.array(validation_target)
-    #test_audio_predictors = np.array(test_predictors[0])
-    #test_img_predictors = test_predictors[1]
-    #test_target = np.array(test_target)
-
-    print ('\nShapes:')
-    print ('Training predictors: ', training_audio_predictors.shape)
-    print ('Validation predictors: ', validation_audio_predictors.shape)
-    #print ('Test predictors: ', test_audio_predictors.shape)
-
-    #convert to tensor
-    training_audio_predictors = torch.tensor(training_audio_predictors).float()
-    validation_audio_predictors = torch.tensor(validation_audio_predictors).float()
-    #test_audio_predictors = torch.tensor(test_audio_predictors).float()
-    training_target = torch.tensor(training_target).float()
-    validation_target = torch.tensor(validation_target).float()
-    #test_target = torch.tensor(test_target).float()
-    
-    #build dataset from tensors
-    # tr_dataset = utils.TensorDataset(training_predictors, training_target)
-    # val_dataset = utils.TensorDataset(validation_predictors, validation_target)
-    # test_dataset = utils.TensorDataset(test_predictors, test_target)
-    
-    transform = transforms.Compose([  
-        transforms.ToTensor(),
-    ])
-
-    tr_dataset = CustomAudioVisualDataset((training_audio_predictors, training_img_predictors), training_target, args.path_images, args.path_csv_images_train, transform)
-    val_dataset = CustomAudioVisualDataset((validation_audio_predictors,validation_img_predictors), validation_target, args.path_images, args.path_csv_images_train, transform)
-    #test_dataset = CustomAudioVisualDataset((test_audio_predictors,test_img_predictors), test_target, args.path_images, args.path_csv_images_test, transform)
-    
-    #build data loader from dataset
-    #tr_data = utils.DataLoader(tr_dataset, args.batch_size, shuffle=True, pin_memory=True)
-    #val_data = utils.DataLoader(val_dataset, args.batch_size, shuffle=False, pin_memory=True)
-    #test_data = utils.DataLoader(test_dataset, args.batch_size, shuffle=False, pin_memory=True)
-    return tr_dataset, val_dataset#, test_data
 
 def _get_free_port():
   import socketserver
@@ -242,7 +184,8 @@ def main(rank, world_size, port, args):
     #print("The number of trainable parameters is:{}".format(numParams(net)))
 
     #dataset and dataloader
-    tr_dataset, val_dataset = load_dataset(args)     #FIXME: 两个进程就超内存了wtf
+    tr_dataset, val_dataset = make_dataset(args)     #FIXME: 两个进程就超内存了wtf
+
     trainloader = utils.DataLoader(tr_dataset, args.batch_size, drop_last= True, sampler=DistributedSampler(tr_dataset, num_replicas=world_size, rank=rank))
     valloader = utils.DataLoader(val_dataset, 1, sampler=DistributedSampler(val_dataset, num_replicas=world_size, rank=rank))
 

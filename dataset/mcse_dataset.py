@@ -5,7 +5,7 @@ import torch.utils.data as data
 import pyroomacoustics as pra
 import numpy as np
 from scipy.io import wavfile
-from audio_util import make_audio
+from dataset.audio_util import make_audio
 import scipy.signal as signal
 import json
 
