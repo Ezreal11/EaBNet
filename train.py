@@ -66,7 +66,7 @@ def main(args):
         pin_memory=True,
     )
 
-    tr_dataset = make_dataset(args)
+    tr_dataset = make_dataset(args) #pass
     
     #build data loader from dataset
     dataloader = utils.DataLoader(tr_dataset, args.batch_size, shuffle=True, pin_memory=True)
@@ -157,7 +157,7 @@ if __name__ == '__main__':
     parser.add_argument('--validation_target_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_target_validation.pkl')
     parser.add_argument('--test_predictors_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_predictors_test.pkl')
     parser.add_argument('--test_target_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_target_test.pkl')
-    parser.add_argument('--dataset', type=str, default='l3das23', choices=['l3das23', 'mcse'])
+    parser.add_argument('--dataset', type=str, default='mcse', choices=['l3das23', 'mcse'])
     
 
     #saving parameters
@@ -174,5 +174,4 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    main(args,os.environ['RANK'],int(os.environ['WORLD_SIZE']))
-    #看看rank怎么设置，launch.json
+    main(args)

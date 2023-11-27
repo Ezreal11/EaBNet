@@ -13,6 +13,7 @@ from dataset import make_dataset
 
 from EaBNet import EaBNet, numParams, com_mag_mse_loss
 from dataset.custom_dataset import CustomAudioVisualDataset
+from dataset import make_dataset
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -115,7 +116,7 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
 
                 #size of input tensor and input format are different.         tensor shape: (1, 161, 480, 2), input_format: CHW
                 writer.add_image('estimated_spectrogram', esti_stft[..., 0], iter)
-                writer.add_image('noisy_spectrogram', noisy_stft[..., 0, 0], iter)
+                writer.add_image('noisy_spectrogram', noisy_stft[..., 0, 0], iter)  #noisy形状不对 .transpose(1, 2)
                 writer.add_image('target_spectrogram', target_stft[..., 0], iter)
                 
 
@@ -192,7 +193,7 @@ def main(rank, world_size, port, args):
     
     #-------------------------training loop-------------------------
     print('pid:', rank)
-    #evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
+    #evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)  #for debug
     
     loss_list = []
     for epoch in range(args.total_epoch):
@@ -277,7 +278,8 @@ if __name__ == '__main__':
     parser.add_argument('--validation_target_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_target_validation.pkl')
     parser.add_argument('--test_predictors_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_predictors_test.pkl')
     parser.add_argument('--test_target_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_target_test.pkl')
-    
+    parser.add_argument('--dataset', type=str, default='l3das23', choices=['l3das23', 'mcse'])
+
     #saving parameters
     from datetime import datetime
     exptime = datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
@@ -300,8 +302,8 @@ if __name__ == '__main__':
     #specify the path to load checkpoints
     #args.checkpoint_dir = '/data/wbh/l3das23/experiment/2023-11-23-14:22:43/checkpoints/'
     #args.results_path = '/data/wbh/l3das23/experiment/2023-11-23-14:22:43/results/'
-    #args.checkpoint_dir = '/data/wbh/l3das23/experiment/debug/checkpoints/'
-    #args.results_path = '/data/wbh/l3das23/experiment/debug/results/'
+    args.checkpoint_dir = '/data/wbh/l3das23/experiment/debug/checkpoints/'
+    args.results_path = '/data/wbh/l3das23/experiment/debug/results/'
     os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     world_size = torch.cuda.device_count()
     port = _get_free_port()
