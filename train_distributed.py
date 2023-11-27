@@ -95,7 +95,7 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
             loss_list.append(loss.item()/torch.distributed.get_world_size())
             
             #save an example
-            if i == 0:
+            if i in args.example_index:
                 sr = args.sr
                 wav_len = int(args.wav_len * sr)
                 win_size = int(args.win_size * sr)
@@ -104,21 +104,20 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
                 #esti_stft:[1, 2, 480, 161]  noisy_stft:[1, 480, 161, 4, 2]
                 #stft ouput:[batch_size*mics, freq_num(161), seq_len, 2] [batch_size, freq_num, seq_len, 2]
                 esti_stft, target_stft = esti_stft.permute(0, 3, 2, 1), target_stft.permute(0, 3, 2, 1)
-                print(esti_stft.shape)
                 esti_wav = torch.istft(torch.view_as_complex(esti_stft.contiguous()), fft_num, win_shift, win_size, torch.hann_window(win_size).to(device))
                 esti_wav = esti_wav.cpu().numpy()   #[1, 76640]
                 noisy_wav = x.squeeze(0).cpu().numpy()  #[4, 76672]
                 target_wav = target.squeeze(0).cpu().numpy()    #[1, 76672]
 
                 writer = writer or SummaryWriter(args.checkpoint_dir)
-                writer.add_audio('estimated_audio', esti_wav, iter, args.sr)
-                writer.add_audio('noisy_audio', noisy_wav[:1,:], iter, args.sr)
-                writer.add_audio('target_audio', target_wav, iter, args.sr)
+                writer.add_audio(f'estimated_audio{i}', esti_wav, iter, args.sr)
+                writer.add_audio(f'noisy_audio{i}', noisy_wav[:1,:], iter, args.sr)
+                writer.add_audio(f'target_audio{i}', target_wav, iter, args.sr)
 
                 #size of input tensor and input format are different.         tensor shape: (1, 161, 480, 2), input_format: CHW
-                writer.add_image('estimated_spectrogram', esti_stft[..., 0], iter)
-                writer.add_image('noisy_spectrogram', noisy_stft[..., 0, 0], iter)  #noisy形状不对 .transpose(1, 2)
-                writer.add_image('target_spectrogram', target_stft[..., 0], iter)
+                writer.add_image(f'estimated_spectrogram{i}', torch.flip(esti_stft[..., 0], [1]), iter)
+                writer.add_image(f'noisy_spectrogram{i}', torch.flip(noisy_stft.transpose(1, 2)[..., 0, 0], [1]), iter)
+                writer.add_image(f'target_spectrogram{i}', torch.flip(target_stft[..., 0], [1]), iter)
                 
 
     mean_loss = sum(loss_list)/len(loss_list)
@@ -304,15 +303,17 @@ if __name__ == '__main__':
                         help="Path to the CSV file for the couples (name_audio, name_photo)")
     parser.add_argument("--saving_interval", type=int, default=1)
     parser.add_argument('--validate_once_before_train', action='store_true', default=False)
+    parser.add_argument('--example_index', nargs='+', type=int, default=[0, 10, 20, 30, 40, 50, 60, 70, 80, 90])
+
 
     args = parser.parse_args()
 
     #specify the path to load checkpoints
     #args.checkpoint_dir = '/data/wbh/l3das23/experiment/2023-11-23-14:22:43/checkpoints/'
     #args.results_path = '/data/wbh/l3das23/experiment/2023-11-23-14:22:43/results/'
-    # args.checkpoint_dir = '/data/wbh/l3das23/experiment/debug/checkpoints/'
-    # args.results_path = '/data/wbh/l3das23/experiment/debug/results/'
-    # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    #args.checkpoint_dir = '/data/wbh/l3das23/experiment/debug1/checkpoints/'
+    #args.results_path = '/data/wbh/l3das23/experiment/debug1/results/'
+    #os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     world_size = torch.cuda.device_count()
     port = _get_free_port()
     torch.multiprocessing.spawn(main, args=(world_size, port, args, ), nprocs=world_size)
