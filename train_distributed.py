@@ -65,8 +65,8 @@ def prepare_data(x, target, device, args):
     noisy_wav = noisy_wav.contiguous().view(batch_size*mics, -1)#noisy_wav.shape[-1]) #[batch_size*mics, wav_len]
     target_wav = target.squeeze(1)
     #[batch_size*mics, freq_num, seq_len, 2]
-    noisy_stft = torch.stft(noisy_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(noisy_wav.device))
-    target_stft = torch.stft(target_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(target_wav.device))
+    noisy_stft = torch.stft(noisy_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(noisy_wav.device),return_complex=False)
+    target_stft = torch.stft(target_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(target_wav.device),return_complex=False)
     _, freq_num, seq_len, _ = noisy_stft.shape
     noisy_stft = noisy_stft.view(batch_size, mics, freq_num, seq_len, -1).permute(0, 3, 2, 1, 4).to(device)
     target_stft = target_stft.permute(0, 3, 2, 1).to(device)
@@ -187,7 +187,7 @@ def main(rank, world_size, port, args):
     #dataset and dataloader
     tr_dataset, val_dataset = make_dataset(args)     #FIXME: 两个进程就超内存了wtf
 
-    trainloader = utils.DataLoader(tr_dataset, args.batch_size, drop_last= True, sampler=DistributedSampler(tr_dataset, num_replicas=world_size, rank=rank))
+    trainloader = utils.DataLoader(tr_dataset, args.batch_size, num_workers=args.num_workers, drop_last= True, sampler=DistributedSampler(tr_dataset, num_replicas=world_size, rank=rank))
     valloader = utils.DataLoader(val_dataset, 1, sampler=DistributedSampler(val_dataset, num_replicas=world_size, rank=rank))
 
     
@@ -244,6 +244,7 @@ if __name__ == '__main__':
                                      "network according to your own pipeline")
     #eabnet parameters
     parser.add_argument("--batch_size", type=int, default=6)    #8 in paper
+    parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--total_epoch", type=int, default=200)  #60 in paper
     parser.add_argument("--mics", type=int, default=4)
     parser.add_argument("--sr", type=int, default=16000)
@@ -302,9 +303,9 @@ if __name__ == '__main__':
     #specify the path to load checkpoints
     #args.checkpoint_dir = '/data/wbh/l3das23/experiment/2023-11-23-14:22:43/checkpoints/'
     #args.results_path = '/data/wbh/l3das23/experiment/2023-11-23-14:22:43/results/'
-    args.checkpoint_dir = '/data/wbh/l3das23/experiment/debug/checkpoints/'
-    args.results_path = '/data/wbh/l3das23/experiment/debug/results/'
-    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    # args.checkpoint_dir = '/data/wbh/l3das23/experiment/debug/checkpoints/'
+    # args.results_path = '/data/wbh/l3das23/experiment/debug/results/'
+    # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
     world_size = torch.cuda.device_count()
     port = _get_free_port()
     torch.multiprocessing.spawn(main, args=(world_size, port, args, ), nprocs=world_size)

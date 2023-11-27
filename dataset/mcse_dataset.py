@@ -187,13 +187,13 @@ class McseDatasetForTrain(data.Dataset):
         with open(opt['mcse_settings'],'r') as f:
             self.mcse_settings = json.load(f)
         with open(opt['speech_list'],'r') as f:
-            self.speech_list = f.readlines()
+            self.speech_list = f.read().split('\n')
         with open(opt['noise_list'],'r') as f:
-            self.noise_list = f.readlines()
+            self.noise_list = f.read().split('\n')
         self.clip_seconds = opt['clip_seconds']
         
     def __len__(self):
-        return len(self.clean_list)
+        return len(self.speech_list)
 
     def __getitem__(self, index):
         sample = generate_random_noisy_for_speech(
@@ -206,14 +206,14 @@ class McseDatasetForTrain(data.Dataset):
             )
         clean = sample['clean']
         noisy = sample['noisy']
-        return torch.tensor(noisy), torch.tensor(clean).reshape(1,-1)
+        return torch.tensor(noisy,dtype=torch.float), torch.tensor(clean,dtype=torch.float).reshape(1,-1)
 
 
 class McseDatasetForVal(data.Dataset):
     def __init__(self, opt) -> None:
         super().__init__()
         self.clean_root = opt['clean_root']
-        self.noisy_root = opt['noise_root']
+        self.noisy_root = opt['noisy_root']
         self.sample_list = os.listdir(self.clean_root)
         
     def __len__(self):
@@ -228,4 +228,16 @@ class McseDatasetForVal(data.Dataset):
         return noisy, clean
         
 def make_mcse_dataset(args):
-    pass
+    train_dataset = McseDatasetForTrain({
+        'speech_root': 'data/datasets/datasets_fullband/clean_fullband/read_speech',
+        'noise_root': 'data/datasets/datasets_fullband/noise_fullband',
+        'speech_list': 'data/datasets/datasets_fullband/cleans_train',
+        'noise_list': 'data/datasets/datasets_fullband/noises_train',
+        'mcse_settings': 'dataset/mcse_dataset_settings.json',
+        'clip_seconds': 6
+    })
+    val_dataset = McseDatasetForVal({
+        'clean_root': 'data/datasets/mcse_val/clean',
+        'noisy_root': 'data/datasets/mcse_val/noisy'
+    })
+    return train_dataset, val_dataset
