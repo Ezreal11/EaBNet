@@ -285,6 +285,8 @@ if __name__ == '__main__':
     parser.add_argument('--test_predictors_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_predictors_test.pkl')
     parser.add_argument('--test_target_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_target_test.pkl')
     parser.add_argument('--dataset', type=str, default='l3das23', choices=['l3das23', 'mcse'])
+    parser.add_argument('--mcse_dataset_train_speech_root', type=str, default='data/datasets/datasets_fullband/clean_fullband/read_speech')
+    parser.add_argument('--mcse_dataset_train_noise_root', type=str, default='data/datasets/datasets_fullband/noise_fullband')
 
     #saving parameters
     from datetime import datetime
