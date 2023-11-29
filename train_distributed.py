@@ -9,6 +9,7 @@ import os, glob
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import soundfile as sf
+import matplotlib.pyplot as plt
 from dataset import make_dataset
 
 from EaBNet import EaBNet, numParams, com_mag_mse_loss
@@ -22,10 +23,11 @@ def _get_free_port():
   with socketserver.TCPServer(('localhost', 0), None) as s:
     return s.server_address[1]
 
-def save_checkpoint(model, optimizer, iteration, filepath):
+
+def save_checkpoint(model, optimizer, iteration, epoch, filepath):
     folder = os.path.dirname(filepath)
     if not os.path.exists(folder):
-        print('maybe useless cuz tensorboard create it ahead, but if not:')
+        #maybe useless cuz tensorboard create it ahead, but if not:
         os.makedirs(folder)
 
     if isinstance(model, DDP):
@@ -33,22 +35,29 @@ def save_checkpoint(model, optimizer, iteration, filepath):
     checkpoint = {
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'iteration': iteration
+        'iteration': iteration,
+        'epoch': epoch
     }
     torch.save(checkpoint, filepath)
     print(f"Checkpoint saved at '{filepath}'")
 
+
 def load_checkpoint(model, optimizer, filepath):
     if not os.path.exists(filepath):
         print(f"Checkpoint '{filepath}' not found")
-        return -1
+        return model, optimizer, -1, -1
     checkpoint = torch.load(filepath)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     iteration = checkpoint['iteration']
+    if 'epoch' in checkpoint:
+        epoch = checkpoint['epoch']
+    else:
+        epoch = 0
     print(f"Checkpoint loaded from '{filepath}', start from iteration {iteration}")
     
-    return model, optimizer, iteration
+    return model, optimizer, iteration, epoch
+
 
 def prepare_data(x, target, device, args):
     batch_size = x.shape[0]
@@ -79,7 +88,14 @@ def prepare_data(x, target, device, args):
     #noisy: [4, 601, 161, 9, 2]
     return noisy_stft, target_stft
  
+
 def evaluate(is_master, model, device, criterion, valloader, iter, writer, args):
+    #TODO: To be tested
+    def coloring(spectrum):
+        spectrum_normalized = (spectrum - torch.min(spectrum)) / (torch.max(spectrum) - torch.min(spectrum))
+        colormap = plt.get_cmap('jet')
+        return colormap(spectrum_normalized.numpy())
+
     model.eval()
     loss_list = []
     with torch.no_grad():
@@ -114,10 +130,9 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
                 writer.add_audio(f'noisy_audio{i}', noisy_wav[:1,:], iter, args.sr)
                 writer.add_audio(f'target_audio{i}', target_wav, iter, args.sr)
 
-                #size of input tensor and input format are different.         tensor shape: (1, 161, 480, 2), input_format: CHW
-                writer.add_image(f'estimated_spectrogram{i}', torch.flip(esti_stft[..., 0], [1]), iter)
-                writer.add_image(f'noisy_spectrogram{i}', torch.flip(noisy_stft.transpose(1, 2)[..., 0, 0], [1]), iter)
-                writer.add_image(f'target_spectrogram{i}', torch.flip(target_stft[..., 0], [1]), iter)
+                writer.add_image(f'estimated_spectrogram{i}', coloring(torch.flip(esti_stft[..., 0], [1])), iter)
+                writer.add_image(f'noisy_spectrogram{i}', coloring(torch.flip(noisy_stft.transpose(1, 2)[..., 0, 0], [1])), iter)
+                writer.add_image(f'target_spectrogram{i}', coloring(torch.flip(target_stft[..., 0], [1])), iter)
                 
 
     mean_loss = sum(loss_list)/len(loss_list)
@@ -126,7 +141,7 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
         writer.add_scalar('valid_loss', mean_loss, iter)
 
     model.train()
-    #return test_loss
+
 
 def main(rank, world_size, port, args):
     os.environ['MASTER_ADDR'] = 'localhost'
@@ -148,23 +163,9 @@ def main(rank, world_size, port, args):
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
 
-    net = EaBNet(k1=args.k1,
-                 k2=args.k2,
-                 c=args.c,
-                 M=args.M,
-                 embed_dim=args.embed_dim,
-                 kd1=args.kd1,
-                 cd1=args.cd1,
-                 d_feat=args.d_feat,
-                 p=args.p,
-                 q=args.q,
-                 is_causal=args.is_causal,
-                 is_u2=args.is_u2,
-                 bf_type=args.bf_type,
-                 topo_type=args.topo_type,
-                 intra_connect=args.intra_connect,
-                 norm_type=args.norm_type,
-                 ).to(device)
+    net = EaBNet(k1=args.k1, k2=args.k2, c=args.c, M=args.M, embed_dim=args.embed_dim, kd1=args.kd1, cd1=args.cd1,
+                 d_feat=args.d_feat, p=args.p, q=args.q, is_causal=args.is_causal, is_u2=args.is_u2, bf_type=args.bf_type,
+                 topo_type=args.topo_type, intra_connect=args.intra_connect, norm_type=args.norm_type,).to(device)
     
     #loss and optimizer
     loss = nn.L1Loss()
@@ -176,38 +177,32 @@ def main(rank, world_size, port, args):
     if len(cplist) > 0:
         paths = [int(os.path.basename(path).split('.')[0]) for path in cplist]
         checkpoint_path = cplist[paths.index(max(paths))]
-        net, optimizer, resume_iter = load_checkpoint(net, optimizer, checkpoint_path)  
-        if resume_iter != -1:
-            current_iter = resume_iter + 1
+        net, optimizer, resume_iter, resume_epoch = load_checkpoint(net, optimizer, checkpoint_path)  
+        current_iter = resume_iter + 1
+        #epoch = resume_epoch + 1
 
     net = DDP(net, device_ids=[device])
     net.train()
     #print("The number of trainable parameters is:{}".format(numParams(net)))
 
     #dataset and dataloader
-    tr_dataset, val_dataset = make_dataset(args)     #FIXME: 两个进程就超内存了wtf
-
+    tr_dataset, val_dataset = make_dataset(args)
     trainloader = utils.DataLoader(tr_dataset, args.batch_size, num_workers=args.num_workers, drop_last= True, sampler=DistributedSampler(tr_dataset, num_replicas=world_size, rank=rank))
     valloader = utils.DataLoader(val_dataset, 1, sampler=DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False))
 
     
     #-------------------------training loop-------------------------
     print('pid:', rank)
-    #evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)  #for debug
     
     #validation
     if is_master and args.validate_once_before_train:
         evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
-        #write enhanced audio
 
     loss_list = []
-    for epoch in range(args.total_epoch):
+    for epoch in range(resume_epoch + 1, args.total_epoch):
         #for i, x in enumerate(dataloader):
-        for i, (x, target) in enumerate(tqdm(trainloader,desc=f'Epoch:{epoch}')):
-            #临时cat4声道到9声道
-            #x = torch.cat((x, x), dim=1)
-            #x = torch.cat((x, x[:, 0:1, :]), dim=1) #[4, 9, 76672]
-            
+        for i, (x, target) in enumerate(tqdm(trainloader,desc=f'Epoch:{epoch}') if is_master else trainloader):
+        
             optimizer.zero_grad()
             noisy_stft, target_stft = prepare_data(x, target, device, args)
 
@@ -219,27 +214,32 @@ def main(rank, world_size, port, args):
             l = com_mag_mse_loss(esti_stft, target_stft, frame_list)
             l.backward()
             optimizer.step()
-
             loss_list.append(l.item())
+
+            current_iter += 1
             if is_master:
                 if current_iter % 50 == 0:
                     writer = writer or SummaryWriter(args.checkpoint_dir)   #lazy write
-                    mean_loss = sum(loss_list)/len(loss_list)
-                    writer.add_scalar('loss', mean_loss, current_iter)
+                    writer.add_scalar('loss', sum(loss_list)/len(loss_list), current_iter)  #current_iter*world_size*args.batch_size
                     loss_list = []
-                
-            current_iter += 1
+                #save checkpoint
+                if current_iter % int(args.saving_interval * len(trainloader)) == 0:
+                    #writer.add_scalar('loss', mean_loss, current_iter)
+                    save_checkpoint(net, optimizer, current_iter, epoch ,os.path.join(args.checkpoint_dir, f'{current_iter}.pth'))
+                #validation
+                if current_iter % int(args.valid_interval * len(trainloader)) == 0:
+                    evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
+            
         
         #-------------------------end of an epoch-------------------------
         print(f'end epoch {epoch}')
-        #save checkpoint
+        '''#save checkpoint
         if is_master and (epoch % args.saving_interval == 0 or epoch == args.total_epoch - 1):
             writer.add_scalar('loss', mean_loss, current_iter)
-            save_checkpoint(net, optimizer, current_iter, os.path.join(args.checkpoint_dir, f'{current_iter}.pth'))
+            save_checkpoint(net, optimizer, current_iter, epoch ,os.path.join(args.checkpoint_dir, f'{current_iter}.pth'))
         #validation
         if is_master and (epoch % args.valid_interval == 0 or epoch == args.total_epoch - 1):
-            evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
-            #write enhanced audio
+            evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)'''
 
 
 
@@ -250,8 +250,8 @@ if __name__ == '__main__':
     #eabnet parameters
     parser.add_argument("--batch_size", type=int, default=6)    #8 in paper
     parser.add_argument("--num_workers", type=int, default=0)
-    parser.add_argument("--total_epoch", type=int, default=200)  #60 in paper
-    parser.add_argument("--mics", type=int, default=4)
+    parser.add_argument("--total_epoch", type=int, default=100)  #60 in paper
+    parser.add_argument("--mics", type=int, default=8)
     parser.add_argument("--sr", type=int, default=16000)
     parser.add_argument("--wav_len", type=float, default=6.0)
     parser.add_argument("--win_size", type=float, default=0.020)
@@ -260,7 +260,7 @@ if __name__ == '__main__':
     parser.add_argument("--k1", type=tuple, default=(2,3))
     parser.add_argument("--k2", type=tuple, default=(1,3))
     parser.add_argument("--c", type=int, default=64)
-    parser.add_argument("--M", type=int, default=4)
+    parser.add_argument("--M", type=int, default=8)
     parser.add_argument("--embed_dim", type=int, default=64)
     parser.add_argument("--kd1", type=int, default=5)
     parser.add_argument("--cd1", type=int, default=64)
@@ -274,9 +274,8 @@ if __name__ == '__main__':
     parser.add_argument("--intra_connect", type=str, default="cat", choices=["cat", "add"])
     parser.add_argument("--norm_type", type=str, default="IN", choices=["BN", "IN", "cLN"])
     parser.add_argument("--fixed_seed", type=bool, default=False, choices=[True, False])
-    parser.add_argument("--valid_interval", type=int, default=4)
 
-    #dataset parameters     processed是4声道，processed1是8声道，但是加载时超内存
+    #l3das23 dataset parameters     processed是4声道，processed1是8声道，但是加载时超内存
     processed_folder = 'processed'
     parser.add_argument('--training_predictors_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_predictors_train.pkl')
     parser.add_argument('--training_target_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_target_train.pkl')
@@ -284,7 +283,7 @@ if __name__ == '__main__':
     parser.add_argument('--validation_target_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_target_validation.pkl')
     parser.add_argument('--test_predictors_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_predictors_test.pkl')
     parser.add_argument('--test_target_path', type=str, default=f'/data/wbh/l3das23/{processed_folder}/task1_target_test.pkl')
-    parser.add_argument('--dataset', type=str, default='l3das23', choices=['l3das23', 'mcse'])
+    parser.add_argument('--dataset', type=str, default='mcse', choices=['l3das23', 'mcse'])
     parser.add_argument('--mcse_dataset_train_speech_root', type=str, default='data/datasets/datasets_fullband/clean_fullband/read_speech')
     parser.add_argument('--mcse_dataset_train_noise_root', type=str, default='data/datasets/datasets_fullband/noise_fullband')
     parser.add_argument('--mcse_dataset_train_set', type=str, choices=['online','offline'], default='online')
@@ -296,7 +295,7 @@ if __name__ == '__main__':
     #                    help='Experiment name')
     parser.add_argument('--results_path', type=str, default=f'/data/wbh/l3das23/experiment/{exptime}/results',
                         help='Folder to write results dicts into')
-    parser.add_argument('--checkpoint_dir', type=str, default=f'/data/wbh/l3das23/experiment/{exptime}/checkpoints',
+    parser.add_argument('--checkpoint_dir', type=str, default=f'/data/wbh/l3das23/experiment/{exptime}',
                         help='Folder to write checkpoints into')
     parser.add_argument('--path_images', type=str, default=None,
                         help="Path to the folder containing all images of Task1. None when using the audio-only version")
@@ -304,19 +303,15 @@ if __name__ == '__main__':
                         help="Path to the CSV file for the couples (name_audio, name_photo) in the train/val set")
     parser.add_argument('--path_csv_images_test', type=str, default='/data/wbh/l3das23/L3DAS23_Task1_dev/audio_image.csv',
                         help="Path to the CSV file for the couples (name_audio, name_photo)")
-    parser.add_argument("--saving_interval", type=int, default=1)
+    parser.add_argument("--saving_interval", type=float, default=1.0)
+    parser.add_argument("--valid_interval", type=float, default=1.0)
     parser.add_argument('--validate_once_before_train', action='store_true', default=False)
     parser.add_argument('--example_index', nargs='+', type=int, default=[0, 10, 20, 30, 40, 50, 60, 70, 80, 90])
-
-
+    
     args = parser.parse_args()
 
-    #specify the path to load checkpoints
-    #args.checkpoint_dir = '/data/wbh/l3das23/experiment/2023-11-23-14:22:43/checkpoints/'
-    #args.results_path = '/data/wbh/l3das23/experiment/2023-11-23-14:22:43/results/'
-    #args.checkpoint_dir = '/data/wbh/l3das23/experiment/debug1/checkpoints/'
-    #args.results_path = '/data/wbh/l3das23/experiment/debug1/results/'
-    #os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
+
     world_size = torch.cuda.device_count()
     port = _get_free_port()
     torch.multiprocessing.spawn(main, args=(world_size, port, args, ), nprocs=world_size)
