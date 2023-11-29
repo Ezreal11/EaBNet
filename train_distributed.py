@@ -92,14 +92,16 @@ def prepare_data(x, target, device, args):
 def evaluate(is_master, model, device, criterion, valloader, iter, writer, args):
     #TODO: To be tested
     def coloring(spectrum):
+        spectrum = torch.log(torch.abs(spectrum) + 1e-6)
         spectrum_normalized = (spectrum - torch.min(spectrum)) / (torch.max(spectrum) - torch.min(spectrum))
-        colormap = plt.get_cmap('jet')
-        return colormap(spectrum_normalized.numpy())
+        colormap = plt.get_cmap('inferno')
+        ret = colormap(spectrum_normalized.numpy())[...,:3].transpose(2, 0, 1)
+        return ret
 
     model.eval()
     loss_list = []
     with torch.no_grad():
-        for i, (x, target) in enumerate(tqdm(valloader,desc=f'Valid:')):
+        for i, (x, target) in enumerate(tqdm(valloader,desc=f'Valid:') if is_master else valloader):
             target = target.to(device)
             x = x.to(device)
             noisy_stft, target_stft = prepare_data(x, target, device, args)
@@ -111,7 +113,7 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
             loss_list.append(loss.item()/torch.distributed.get_world_size())
             
             #save an example
-            if i in args.example_index:
+            if is_master and i in args.example_index:
                 sr = args.sr
                 wav_len = int(args.wav_len * sr)
                 win_size = int(args.win_size * sr)
@@ -130,9 +132,9 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
                 writer.add_audio(f'noisy_audio{i}', noisy_wav[:1,:], iter, args.sr)
                 writer.add_audio(f'target_audio{i}', target_wav, iter, args.sr)
 
-                writer.add_image(f'estimated_spectrogram{i}', coloring(torch.flip(esti_stft[..., 0], [1])), iter)
-                writer.add_image(f'noisy_spectrogram{i}', coloring(torch.flip(noisy_stft.transpose(1, 2)[..., 0, 0], [1])), iter)
-                writer.add_image(f'target_spectrogram{i}', coloring(torch.flip(target_stft[..., 0], [1])), iter)
+                writer.add_image(f'estimated_spectrogram{i}', coloring(torch.flip(esti_stft[..., 0], [1]).cpu().squeeze(0)), iter)
+                writer.add_image(f'noisy_spectrogram{i}', coloring(torch.flip(noisy_stft.transpose(1, 2)[..., 0, 0], [1]).cpu().squeeze(0)), iter)
+                writer.add_image(f'target_spectrogram{i}', coloring(torch.flip(target_stft[..., 0], [1]).cpu().squeeze(0)), iter)
                 
 
     mean_loss = sum(loss_list)/len(loss_list)
@@ -196,7 +198,7 @@ def main(rank, world_size, port, args):
     print('pid:', rank)
     
     #validation
-    if is_master and args.validate_once_before_train:
+    if args.validate_once_before_train:
         evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
 
     loss_list = []
@@ -228,8 +230,8 @@ def main(rank, world_size, port, args):
                     #writer.add_scalar('loss', mean_loss, current_iter)
                     save_checkpoint(net, optimizer, current_iter, epoch ,os.path.join(args.checkpoint_dir, f'{current_iter}.pth'))
                 #validation
-                if current_iter % int(args.valid_interval * len(trainloader)) == 0:
-                    evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
+            if current_iter % int(args.valid_interval * len(trainloader)) == 0:
+                evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
             
         
         #-------------------------end of an epoch-------------------------
@@ -315,5 +317,6 @@ if __name__ == '__main__':
 
     world_size = torch.cuda.device_count()
     port = _get_free_port()
+    print('Current checkpoint dir:', args.checkpoint_dir)
     torch.multiprocessing.spawn(main, args=(world_size, port, args, ), nprocs=world_size)
     #main(args)
