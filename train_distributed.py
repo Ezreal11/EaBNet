@@ -173,6 +173,7 @@ def main(rank, world_size, port, args):
 
     #resume from checkpoint
     current_iter = 0
+    resume_epoch = 0
     cplist = glob.glob(f"{args.checkpoint_dir}/*.pth")
     if len(cplist) > 0:
         paths = [int(os.path.basename(path).split('.')[0]) for path in cplist]
