@@ -29,19 +29,22 @@ def cal_rotate_matrix_2d(v,v_tgt):
     ])
     return R
 
-def load_audio_and_random_crop(filename,resample_fs, crop_seconds):
+def load_audio_and_random_crop(filename,resample_fs, crop_seconds, start_seconds=None):
     fs, audio = wavfile.read(filename)
     n_points = fs*crop_seconds
     if len(audio) < n_points:
         audio = np.append(audio, np.zeros(n_points-len(audio)))
-    start = np.random.randint(0, len(audio)-n_points+1)
+    if start_seconds is None:
+        start = np.random.randint(0, len(audio)-n_points+1)
+    else:
+        start = start_seconds*fs
     audio = audio[start:start+n_points]
     if resample_fs != fs:
         audio = signal.resample(audio, resample_fs*crop_seconds).astype(audio.dtype)
     return audio
 
 
-def generate_random_noisy_for_speech(opt, clip_seconds, target_speech, all_noises, speech_root, noise_root):
+def generate_random_noisy_for_speech(opt, clip_seconds, target_speech, all_noises, speech_root, noise_root, speech_start_sec=None):
 
     # generate random room
 
@@ -135,7 +138,7 @@ def generate_random_noisy_for_speech(opt, clip_seconds, target_speech, all_noise
 
     fs = opt['audio']['fs']
 
-    audio_clean = load_audio_and_random_crop(os.path.join(speech_root, target_speech), resample_fs=fs, crop_seconds=clip_seconds)
+    audio_clean = load_audio_and_random_crop(os.path.join(speech_root, target_speech), resample_fs=fs, crop_seconds=clip_seconds, start_seconds=speech_start_sec)
     audio_noises = []
     for x in noise_list:
         audio_noises.append(load_audio_and_random_crop(os.path.join(noise_root,x), resample_fs=fs, crop_seconds=clip_seconds))
@@ -179,7 +182,7 @@ def generate_random_noisy_for_speech(opt, clip_seconds, target_speech, all_noise
         'noisy': noisy 
     }
 
-class McseDatasetForTrain(data.Dataset):
+class McseDatasetOnline(data.Dataset):
     def __init__(self, opt) -> None:
         super().__init__()
         self.speech_root = opt['speech_root']
@@ -209,12 +212,13 @@ class McseDatasetForTrain(data.Dataset):
         return torch.tensor(noisy,dtype=torch.float), torch.tensor(clean,dtype=torch.float).reshape(1,-1)
 
 
-class McseDatasetForVal(data.Dataset):
+class McseDatasetOffline(data.Dataset):
     def __init__(self, opt) -> None:
         super().__init__()
         self.clean_root = opt['clean_root']
         self.noisy_root = opt['noisy_root']
         self.sample_list = os.listdir(self.clean_root)
+        self.sample_list.sort()
         
     def __len__(self):
         return len(self.sample_list)
@@ -227,16 +231,23 @@ class McseDatasetForVal(data.Dataset):
         noisy, _ = torchaudio.load(noisy_path)
         return noisy, clean
         
+
 def make_mcse_dataset(args):
-    train_dataset = McseDatasetForTrain({
-        'speech_root': args.mcse_dataset_train_speech_root,
-        'noise_root': args.mcse_dataset_train_noise_root,
-        'speech_list': 'data/datasets/datasets_fullband/cleans_train',
-        'noise_list': 'data/datasets/datasets_fullband/noises_train',
-        'mcse_settings': 'dataset/mcse_dataset_settings.json',
-        'clip_seconds': 6
-    })
-    val_dataset = McseDatasetForVal({
+    if args.mcse_dataset_train_set == 'online':
+        train_dataset = McseDatasetOnline({
+            'speech_root': args.mcse_dataset_train_speech_root,
+            'noise_root': args.mcse_dataset_train_noise_root,
+            'speech_list': 'data/datasets/datasets_fullband/cleans_train',
+            'noise_list': 'data/datasets/datasets_fullband/noises_train',
+            'mcse_settings': 'dataset/mcse_dataset_settings.json',
+            'clip_seconds': 6
+        })
+    elif args.mcse_dataset_train_set == 'offline':
+        train_dataset = McseDatasetOffline({
+            'clean_root': 'data/datasets/mcse_train/clean',
+            'noisy_root': 'data/datasets/mcse_train/noisy'
+        })
+    val_dataset = McseDatasetOffline({
         'clean_root': 'data/datasets/mcse_val/clean',
         'noisy_root': 'data/datasets/mcse_val/noisy'
     })

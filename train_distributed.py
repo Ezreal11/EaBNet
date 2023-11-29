@@ -188,7 +188,7 @@ def main(rank, world_size, port, args):
     tr_dataset, val_dataset = make_dataset(args)     #FIXME: 两个进程就超内存了wtf
 
     trainloader = utils.DataLoader(tr_dataset, args.batch_size, num_workers=args.num_workers, drop_last= True, sampler=DistributedSampler(tr_dataset, num_replicas=world_size, rank=rank))
-    valloader = utils.DataLoader(val_dataset, 1, sampler=DistributedSampler(val_dataset, num_replicas=world_size, rank=rank))
+    valloader = utils.DataLoader(val_dataset, 1, sampler=DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False))
 
     
     #-------------------------training loop-------------------------
@@ -287,6 +287,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='l3das23', choices=['l3das23', 'mcse'])
     parser.add_argument('--mcse_dataset_train_speech_root', type=str, default='data/datasets/datasets_fullband/clean_fullband/read_speech')
     parser.add_argument('--mcse_dataset_train_noise_root', type=str, default='data/datasets/datasets_fullband/noise_fullband')
+    parser.add_argument('--mcse_dataset_train_set', type=str, choices=['online','offline'], default='online')
 
     #saving parameters
     from datetime import datetime
