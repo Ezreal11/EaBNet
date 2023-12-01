@@ -12,9 +12,10 @@ import soundfile as sf
 import matplotlib.pyplot as plt
 
 from EaBNet import EaBNet, numParams, com_mag_mse_loss
+from EaBNet import make_eabnet_with_postnet, eabnet_with_postnet_loss
 from dataset.custom_dataset import CustomAudioVisualDataset
 from dataset import make_dataset
-from test import cal_single_metrics
+# from test import cal_single_metrics
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -47,8 +48,11 @@ def load_checkpoint(model, optimizer, filepath):
         print(f"Checkpoint '{filepath}' not found")
         return model, optimizer, -1, -1
     checkpoint = torch.load(filepath)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    if 'optimizer_state_dict' in checkpoint:
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    else:
+        print("Warning: no optimizer state dict found in checkpoint")
     iteration = checkpoint['iteration']
     if 'epoch' in checkpoint:
         epoch = checkpoint['epoch']
@@ -105,7 +109,7 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
             target = target.to(device)
             x = x.to(device)
             noisy_stft, target_stft = prepare_data(x, target, device, args)
-            esti_stft = model(noisy_stft)
+            esti_stft = model(noisy_stft)['esti_stft']
             #loss = criterion(esti_stft, target_stft)
             frame_list = [noisy_stft.shape[1]] * x.shape[0]
             loss = com_mag_mse_loss(esti_stft, target_stft, frame_list)
@@ -133,9 +137,9 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
                 writer.add_audio(f'noisy_audio{i}', noisy_wav[:1,:], iter, args.sr)
                 writer.add_audio(f'target_audio{i}', target_wav, iter, args.sr)
 
-                writer.add_image(f'estimated_spectrogram{i}', coloring(torch.flip(esti_stft[..., 0], [1]).cpu().squeeze(0)), iter)
-                writer.add_image(f'noisy_spectrogram{i}', coloring(torch.flip(noisy_stft.transpose(1, 2)[..., 0, 0], [1]).cpu().squeeze(0)), iter)
-                writer.add_image(f'target_spectrogram{i}', coloring(torch.flip(target_stft[..., 0], [1]).cpu().squeeze(0)), iter)
+                # writer.add_image(f'estimated_spectrogram{i}', coloring(torch.flip(esti_stft[..., 0], [1])), iter)
+                # writer.add_image(f'noisy_spectrogram{i}', coloring(torch.flip(noisy_stft.transpose(1, 2)[..., 0, 0], [1])), iter)
+                # writer.add_image(f'target_spectrogram{i}', coloring(torch.flip(target_stft[..., 0], [1])), iter)
                 
 
     mean_loss = sum(loss_list)/len(loss_list)
@@ -166,9 +170,7 @@ def main(rank, world_size, port, args):
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
 
-    net = EaBNet(k1=args.k1, k2=args.k2, c=args.c, M=args.M, embed_dim=args.embed_dim, kd1=args.kd1, cd1=args.cd1,
-                 d_feat=args.d_feat, p=args.p, q=args.q, is_causal=args.is_causal, is_u2=args.is_u2, bf_type=args.bf_type,
-                 topo_type=args.topo_type, intra_connect=args.intra_connect, norm_type=args.norm_type,).to(device)
+    net = make_eabnet_with_postnet(args).to(device)
     
     #loss and optimizer
     loss = nn.L1Loss()
@@ -202,36 +204,35 @@ def main(rank, world_size, port, args):
     if args.validate_once_before_train:
         evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
 
-    loss_list = [[],[],[]]
+    loss_list = dict()
     for epoch in range(resume_epoch + 1, args.total_epoch):
         #for i, x in enumerate(dataloader):
         for i, (x, target) in enumerate(tqdm(trainloader,desc=f'Epoch:{epoch}') if is_master else trainloader):
             optimizer.zero_grad()
             noisy_stft, target_stft = prepare_data(x, target, device, args)
 
-            #[4, 480, 161, 4/9, 2]
-            esti_stft = net(noisy_stft)
+            output = net(noisy_stft)
 
             #calculate loss
             frame_list = [noisy_stft.shape[1]] * args.batch_size
-            l = com_mag_mse_loss(esti_stft, target_stft, frame_list)
-            #l2 = postnet_loss(esti_stft, target_stft)
-            #final_loss = (l + l2) / 2
 
+            l = eabnet_with_postnet_loss(output, target_stft, frame_list)
             
-            l.backward()       #final_loss.backward()
+            l['final'].backward()       #final_loss.backward()
             optimizer.step()
             
             current_iter += 1
             if is_master:
-                loss_list[0].append(l.item())
-                loss_list[1].append(0)#l2.item())
-                loss_list[2].append(0)#final_loss.item())
+                for k in l.keys():
+                    if k not in loss_list:
+                        loss_list[k] = []
+                    loss_list[k].append(l[k].item())
                 if current_iter % 50 == 0:
                     writer = writer or SummaryWriter(args.checkpoint_dir)   #lazy write
-                    for i in range(3):
-                        writer.add_scalar(f'loss{i + 1}' if i != 2 else 'final_loss', sum(loss_list[i])/len(loss_list[i]), current_iter)
-                        loss_list[i] = []
+
+                    for k in loss_list.keys():
+                        writer.add_scalar('loss/'+k, sum(loss_list[k])/len(loss_list[k]), current_iter)
+
                     #writer.add_scalar('loss', sum(loss_list)/len(loss_list), current_iter)  #current_iter*world_size*args.batch_size
                     #loss_list = []
                 #save checkpoint
@@ -265,6 +266,7 @@ if __name__ == '__main__':
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--total_epoch", type=int, default=100)  #60 in paper
     parser.add_argument("--mics", type=int, default=8)
+    parser.add_argument("--ref_mic", type=int, default=0, help="must be identical to the mcse dataset settings")
     parser.add_argument("--sr", type=int, default=16000)
     parser.add_argument("--wav_len", type=float, default=6.0)
     parser.add_argument("--win_size", type=float, default=0.020)
@@ -287,6 +289,25 @@ if __name__ == '__main__':
     parser.add_argument("--intra_connect", type=str, default="cat", choices=["cat", "add"])
     parser.add_argument("--norm_type", type=str, default="IN", choices=["BN", "IN", "cLN"])
     parser.add_argument("--fixed_seed", type=bool, default=False, choices=[True, False])
+    parser.add_argument("--freeze_eabnet", type=bool, default=False)
+
+    #postnet
+    parser.add_argument("--gagnet_fft_num", type=int, default=320)
+    parser.add_argument("--gagnet_k1", type=tuple, default=(2, 3))
+    parser.add_argument("--gagnet_k2", type=tuple, default=(1, 3))
+    parser.add_argument("--gagnet_c", type=int, default=64)
+    parser.add_argument("--gagnet_kd1", type=int, default=3)
+    parser.add_argument("--gagnet_cd1", type=int, default=64)
+    parser.add_argument("--gagnet_d_feat", type=int, default=256)
+    parser.add_argument("--gagnet_p", type=int, default=2)
+    parser.add_argument("--gagnet_q", type=int, default=3)
+    parser.add_argument("--gagnet_dilas", type=list, default=[1,2,5,9])
+    parser.add_argument("--gagnet_is_u2", type=bool, default=True, choices=[True, False])
+    parser.add_argument("--gagnet_is_causal", type=bool, default=True, choices=[True, False])
+    parser.add_argument("--gagnet_is_squeezed", type=bool, default=False, choices=[True, False])
+    parser.add_argument("--gagnet_acti_type", type=str, default="sigmoid", choices=["sigmoid", "tanh", "relu"])
+    parser.add_argument("--gagnet_intra_connect", type=str, default="cat", choices=["cat", "add"])
+    parser.add_argument("--gagnet_norm_type", type=str, default="IN", choices=["BN", "IN"])
 
     #l3das23 dataset parameters     processed是4声道，processed1是8声道，但是加载时超内存
     processed_folder = 'processed'

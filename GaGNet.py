@@ -67,20 +67,21 @@ class GaGNet(nn.Module):
         self.norm_type = norm_type
 
         if is_u2:
-            self.en = U2Net_Encoder(cin, k1, k2, c, intra_connect, norm_type)
+            self.en = U2Net_Encoder(cin*2, k1, k2, c, intra_connect, norm_type)
         else:
-            self.en = UNet_Encoder(cin, k1, c, norm_type)
+            self.en = UNet_Encoder(cin*2, k1, c, norm_type)
         self.gags = nn.ModuleList([GlanceGazeModule(kd1, cd1, d_feat, p, dilas, fft_num, is_causal, is_squeezed,
                                                     acti_type, norm_type) for _ in range(q)])
 
-    def forward(self, inpt: Tensor) -> list:
+    def forward(self, inpt: Tensor, pre_x: Tensor) -> list:
         if inpt.ndim == 3:
             inpt = inpt.unsqueeze(dim=1)
+            pre_x = pre_x.unsqueeze(dim=1)
         b_size, _, seq_len, _ = inpt.shape
-        feat_x = self.en(inpt)
+        feat_x = self.en(torch.cat([inpt,pre_x],1))
         x = feat_x.transpose(-2, -1).contiguous()
         x = x.view(b_size, -1, seq_len)
-        pre_x = inpt.transpose(-2, -1).contiguous()
+        pre_x = pre_x.transpose(-2, -1).contiguous()
         out_list = []
         for i in range(len(self.gags)):
             tmp = self.gags[i](x, pre_x)
@@ -632,8 +633,8 @@ def main(args, net):
     noisy_wav, target_wav = nn.utils.rnn.pad_sequence(noisy_list, batch_first=True), \
                             nn.utils.rnn.pad_sequence(target_list, batch_first=True)
 
-    noisy_stft = torch.stft(noisy_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(noisy_wav.device))
-    target_stft = torch.stft(target_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(target_wav.device))
+    noisy_stft = torch.stft(noisy_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(noisy_wav.device),return_complex=False)
+    target_stft = torch.stft(target_wav, fft_num, win_shift, win_size, torch.hann_window(win_size).to(target_wav.device),return_complex=False)
     _, freq_num, seq_len, _ = noisy_stft.shape
     noisy_stft, target_stft = noisy_stft.permute(0,3,2,1).cuda(), target_stft.permute(0,3,1,2).cuda()
     # conduct sqrt power-compression
@@ -642,11 +643,32 @@ def main(args, net):
     noisy_stft = torch.stack((noisy_mag * torch.cos(noisy_phase), noisy_mag * torch.sin(noisy_phase)), dim=1).cuda()
     target_stft = torch.stack((target_mag * torch.cos(target_phase), target_mag * torch.sin(target_phase)), dim=1).cuda()
 
-    esti_list = net(noisy_stft)
+    esti_list = net(noisy_stft,noisy_stft)
     print('input size:{} -> output size:{}, label size:{}'.format(noisy_stft.shape, esti_list[-1].shape, target_stft.shape))
     loss = stagewise_com_mag_mse_loss(esti_list, target_stft, frame_list)
     print("Calculated loss value:{}".format(loss.item()))
 
+def make_gag_net(args):
+    net = GaGNet(
+        cin=2,
+        k1=args.gagnet_k1,
+        k2=args.gagnet_k2,
+        c=args.gagnet_c,
+        kd1=args.gagnet_kd1,
+        cd1=args.gagnet_cd1,
+        d_feat=args.gagnet_d_feat,
+        p=args.gagnet_p,
+        q=args.gagnet_q,
+        dilas=args.gagnet_dilas,
+        fft_num=args.gagnet_fft_num,
+        is_u2=args.gagnet_is_u2,
+        is_causal=args.gagnet_is_causal,
+        is_squeezed=args.gagnet_is_squeezed,
+        acti_type=args.gagnet_acti_type,
+        intra_connect=args.gagnet_intra_connect,
+        norm_type=args.gagnet_norm_type,
+        ).cuda()
+    return net
 
 if __name__ == '__main__':
     import argparse
