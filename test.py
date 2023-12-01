@@ -195,8 +195,7 @@ def test(args):
         for k, v in ret.items():
             data[k].append(v)
 
-        if i == 20:
-            break
+        
     
     new_data = {}
     for k, v in data.items():
