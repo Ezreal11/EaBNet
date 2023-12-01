@@ -192,20 +192,19 @@ def main(rank, world_size, port, args):
     tr_dataset, val_dataset = make_dataset(args)
     trainloader = utils.DataLoader(tr_dataset, args.batch_size, num_workers=args.num_workers, drop_last= True, sampler=DistributedSampler(tr_dataset, num_replicas=world_size, rank=rank))
     valloader = utils.DataLoader(val_dataset, 1, sampler=DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False))
-
+    print("trainloader length:", len(trainloader), "valloader length:", len(valloader))
     
     #-------------------------training loop-------------------------
-    print('pid:', rank)
+    #print('pid:', rank)
     
     #validation
     if args.validate_once_before_train:
         evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
 
-    loss_list = []
+    loss_list = [[],[],[]]
     for epoch in range(resume_epoch + 1, args.total_epoch):
         #for i, x in enumerate(dataloader):
         for i, (x, target) in enumerate(tqdm(trainloader,desc=f'Epoch:{epoch}') if is_master else trainloader):
-        
             optimizer.zero_grad()
             noisy_stft, target_stft = prepare_data(x, target, device, args)
 
@@ -215,27 +214,37 @@ def main(rank, world_size, port, args):
             #calculate loss
             frame_list = [noisy_stft.shape[1]] * args.batch_size
             l = com_mag_mse_loss(esti_stft, target_stft, frame_list)
-            l.backward()
-            optimizer.step()
-            loss_list.append(l.item())
+            #l2 = postnet_loss(esti_stft, target_stft)
+            #final_loss = (l + l2) / 2
 
+            
+            l.backward()       #final_loss.backward()
+            optimizer.step()
+            
             current_iter += 1
             if is_master:
+                loss_list[0].append(l.item())
+                loss_list[1].append(0)#l2.item())
+                loss_list[2].append(0)#final_loss.item())
                 if current_iter % 50 == 0:
                     writer = writer or SummaryWriter(args.checkpoint_dir)   #lazy write
-                    writer.add_scalar('loss', sum(loss_list)/len(loss_list), current_iter)  #current_iter*world_size*args.batch_size
-                    loss_list = []
+                    for i in range(3):
+                        writer.add_scalar(f'loss{i + 1}' if i != 2 else 'final_loss', sum(loss_list[i])/len(loss_list[i]), current_iter)
+                        loss_list[i] = []
+                    #writer.add_scalar('loss', sum(loss_list)/len(loss_list), current_iter)  #current_iter*world_size*args.batch_size
+                    #loss_list = []
                 #save checkpoint
                 if current_iter % int(args.saving_interval * len(trainloader)) == 0:
                     #writer.add_scalar('loss', mean_loss, current_iter)
                     save_checkpoint(net, optimizer, current_iter, epoch ,os.path.join(args.checkpoint_dir, f'{current_iter}.pth'))
-                #validation
+            
+            #validation
             if current_iter % int(args.valid_interval * len(trainloader)) == 0:
                 evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
             
         
         #-------------------------end of an epoch-------------------------
-        print(f'end epoch {epoch}')
+        #print(f'end epoch {epoch}')
         '''#save checkpoint
         if is_master and (epoch % args.saving_interval == 0 or epoch == args.total_epoch - 1):
             writer.add_scalar('loss', mean_loss, current_iter)
