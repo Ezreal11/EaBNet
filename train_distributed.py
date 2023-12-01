@@ -219,6 +219,7 @@ def main(rank, world_size, port, args):
             l = eabnet_with_postnet_loss(output, target_stft, frame_list)
             
             l['final'].backward()       #final_loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
             optimizer.step()
             
             current_iter += 1
