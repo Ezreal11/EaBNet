@@ -24,14 +24,15 @@ if [ -d "$exp_root" ]; then
 fi
 
 
-CUDA_VISIBLE_DEVICES=1 python train_distributed.py \
+CUDA_VISIBLE_DEVICES=0 python train_distributed.py \
  --dataset mcse \
- --batch_size 16 \
+ --batch_size 8 \
  --num_workers  24 \
  --valid_interval 1 \
  --mics 8 \
  --M 8 \
  --results_path "$exp_root/results" \
  --checkpoint_dir "$exp_root/checkpoints" \
- --mcse_dataset_train_set offline \
+ --mcse_dataset_train_set online \
+ --freeze_eabnet true \
 #  --validate_once_before_train

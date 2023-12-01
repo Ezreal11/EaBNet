@@ -3,7 +3,9 @@ import torch
 import torch.nn as nn
 from torch.autograd import Variable
 from torch import Tensor
-
+from GaGNet import make_gag_net, stagewise_com_mag_mse_loss
+from einops import rearrange
+        
 class EaBNet(nn.Module):
     def __init__(self,
                  k1: tuple = (2, 3),
@@ -122,6 +124,37 @@ class EaBNet(nn.Module):
                                  (bf_w_r*inpt[...,0,-1]+bf_w_i*inpt[...,0,0]).sum(dim=-1)
             return torch.stack((esti_x_r, esti_x_i), dim=1)
 
+class EaBNetWithPostNet(nn.Module):
+    def __init__(self,args):
+        super().__init__()
+        self.eabnet = EaBNet(k1=args.k1, k2=args.k2, c=args.c, M=args.M, embed_dim=args.embed_dim, kd1=args.kd1, cd1=args.cd1,
+                 d_feat=args.d_feat, p=args.p, q=args.q, is_causal=args.is_causal, is_u2=args.is_u2, bf_type=args.bf_type,
+                 topo_type=args.topo_type, intra_connect=args.intra_connect, norm_type=args.norm_type,)
+        self.ref_mic = args.ref_mic
+        self.postnet = make_gag_net(args)
+        if args.freeze_eabnet:
+            self.freeze_eabnet()
+    
+    def forward(self, noisy_stft):
+        esti0_stft = self.eabnet(noisy_stft)
+
+        inpt = noisy_stft[...,self.ref_mic,:]
+        inpt = rearrange(inpt, 'b t f c -> b c t f')
+        esti1_stft_list = self.postnet(inpt, esti0_stft)
+
+        return {
+            "esti0_stft": esti0_stft,
+            "esti1_stft_list": esti1_stft_list,
+            "esti_stft": esti1_stft_list[-1].permute(0,1,3,2)
+            }
+    
+    def freeze_eabnet(self):
+        cnt = 0
+        for p in self.eabnet.parameters():
+            p.requires_grad = False
+            cnt += 1
+        print(f'freeze {cnt} parameters')
+        
 class U2Net_Encoder(nn.Module):
     def __init__(self,
                  cin: int,
@@ -607,6 +640,16 @@ def com_mag_mse_loss(esti, label, frame_list):
     loss2 = (((esti - label)**2.0)*com_mask_for_loss).sum() / com_mask_for_loss.sum()
     return 0.5*(loss1 + loss2)
 
+def eabnet_with_postnet_loss(output, label, frame_list):
+    loss0 = com_mag_mse_loss(output['esti0_stft'], label, frame_list)
+    loss1 = stagewise_com_mag_mse_loss(output['esti1_stft_list'], label.permute(0,1,3,2), frame_list)
+    loss_final = (loss0+loss1) * 0.5
+    return {
+        'eabnet': loss0,
+        'postnet': loss1,
+        'final': loss_final
+        }
+    
 
 def numParams(net):
     import numpy as np
@@ -769,6 +812,9 @@ def main(args, net):
     input size:torch.Size([4, 601, 161, 9, 2]) -> output size:torch.Size([4, 2, 601, 161]), label size:torch.Size([4, 2, 601, 161])
     Calculated loss value:1.8990187644958496
     '''
+
+def make_eabnet_with_postnet(args):
+    return EaBNetWithPostNet(args)
 
 if __name__ == '__main__':
     import argparse
