@@ -10,11 +10,11 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data.distributed import DistributedSampler
 import soundfile as sf
 import matplotlib.pyplot as plt
-from dataset import make_dataset
 
 from EaBNet import EaBNet, numParams, com_mag_mse_loss
 from dataset.custom_dataset import CustomAudioVisualDataset
 from dataset import make_dataset
+from test import cal_single_metrics
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -112,21 +112,22 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
             torch.distributed.all_reduce(loss)
             loss_list.append(loss.item()/torch.distributed.get_world_size())
             
+
+            sr = args.sr
+            wav_len = int(args.wav_len * sr)
+            win_size = int(args.win_size * sr)
+            win_shift = int(args.win_shift * sr)
+            fft_num = args.fft_num
+            esti_stft, target_stft = esti_stft.permute(0, 3, 2, 1), target_stft.permute(0, 3, 2, 1)
+            esti_wav = torch.istft(torch.view_as_complex(esti_stft.contiguous()), fft_num, win_shift, win_size, torch.hann_window(win_size).to(device))
+            esti_wav = esti_wav.cpu().numpy()   #[1, 76640]
+            noisy_wav = x.squeeze(0).cpu().numpy()  #[4, 76672]
+            target_wav = target.squeeze(0).cpu().numpy()    #[1, 76672]
+            
+            #ret = cal_single_metrics(target_wav[0], noisy_wav[0], esti_wav[0], sr)
+
             #save an example
             if is_master and i in args.example_index:
-                sr = args.sr
-                wav_len = int(args.wav_len * sr)
-                win_size = int(args.win_size * sr)
-                win_shift = int(args.win_shift * sr)
-                fft_num = args.fft_num
-                #esti_stft:[1, 2, 480, 161]  noisy_stft:[1, 480, 161, 4, 2]
-                #stft ouput:[batch_size*mics, freq_num(161), seq_len, 2] [batch_size, freq_num, seq_len, 2]
-                esti_stft, target_stft = esti_stft.permute(0, 3, 2, 1), target_stft.permute(0, 3, 2, 1)
-                esti_wav = torch.istft(torch.view_as_complex(esti_stft.contiguous()), fft_num, win_shift, win_size, torch.hann_window(win_size).to(device))
-                esti_wav = esti_wav.cpu().numpy()   #[1, 76640]
-                noisy_wav = x.squeeze(0).cpu().numpy()  #[4, 76672]
-                target_wav = target.squeeze(0).cpu().numpy()    #[1, 76672]
-
                 writer = writer or SummaryWriter(args.checkpoint_dir)
                 writer.add_audio(f'estimated_audio{i}', esti_wav, iter, args.sr)
                 writer.add_audio(f'noisy_audio{i}', noisy_wav[:1,:], iter, args.sr)
