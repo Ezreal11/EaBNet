@@ -133,13 +133,13 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
             #save an example
             if is_master and i in args.example_index:
                 writer = writer or SummaryWriter(args.checkpoint_dir)
-                writer.add_audio(f'estimated_audio{i}', esti_wav, iter, args.sr)
-                writer.add_audio(f'noisy_audio{i}', noisy_wav[:1,:], iter, args.sr)
-                writer.add_audio(f'target_audio{i}', target_wav, iter, args.sr)
+                writer.add_audio(f'audio{i}/estimated_audio{i}', esti_wav, iter, args.sr)
+                writer.add_audio(f'audio{i}/noisy_audio{i}', noisy_wav[:1,:], iter, args.sr)
+                writer.add_audio(f'audio{i}/target_audio{i}', target_wav, iter, args.sr)
 
-                # writer.add_image(f'estimated_spectrogram{i}', coloring(torch.flip(esti_stft[..., 0], [1])), iter)
-                # writer.add_image(f'noisy_spectrogram{i}', coloring(torch.flip(noisy_stft.transpose(1, 2)[..., 0, 0], [1])), iter)
-                # writer.add_image(f'target_spectrogram{i}', coloring(torch.flip(target_stft[..., 0], [1])), iter)
+                # writer.add_image(f'spectrogram{i}/estimated_spectrogram{i}', coloring(torch.flip(esti_stft[..., 0], [1])), iter)
+                # writer.add_image(f'spectrogram{i}/noisy_spectrogram{i}', coloring(torch.flip(noisy_stft.transpose(1, 2)[..., 0, 0], [1])), iter)
+                # writer.add_image(f'spectrogram{i}/target_spectrogram{i}', coloring(torch.flip(target_stft[..., 0], [1])), iter)
                 
 
     mean_loss = sum(loss_list)/len(loss_list)
