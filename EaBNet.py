@@ -140,7 +140,7 @@ class EaBNetWithPostNet(nn.Module):
 
         inpt = noisy_stft[...,self.ref_mic,:]
         inpt = rearrange(inpt, 'b t f c -> b c t f')
-        esti1_stft_list = self.postnet(inpt, esti0_stft)
+        esti1_stft_list = self.postnet(inpt, esti0_stft.detach())
 
         return {
             "esti0_stft": esti0_stft,
@@ -643,7 +643,7 @@ def com_mag_mse_loss(esti, label, frame_list):
 def eabnet_with_postnet_loss(output, label, frame_list):
     loss0 = com_mag_mse_loss(output['esti0_stft'], label, frame_list)
     loss1 = stagewise_com_mag_mse_loss(output['esti1_stft_list'], label.permute(0,1,3,2), frame_list)
-    loss_final = (loss0+loss1) * 0.5
+    loss_final = loss0+loss1
     return {
         'eabnet': loss0,
         'postnet': loss1,

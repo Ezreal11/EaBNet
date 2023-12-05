@@ -31,7 +31,7 @@ def cal_rotate_matrix_2d(v,v_tgt):
 
 def load_audio_and_random_crop(filename,resample_fs, crop_seconds, start_seconds=None):
     fs, audio = wavfile.read(filename)
-    n_points = fs*crop_seconds
+    n_points = int(fs*crop_seconds)
     if len(audio) < n_points:
         audio = np.append(audio, np.zeros(n_points-len(audio)))
     if start_seconds is None:
@@ -40,7 +40,7 @@ def load_audio_and_random_crop(filename,resample_fs, crop_seconds, start_seconds
         start = start_seconds*fs
     audio = audio[start:start+n_points]
     if resample_fs != fs:
-        audio = signal.resample(audio, resample_fs*crop_seconds).astype(audio.dtype)
+        audio = signal.resample(audio, int(resample_fs*crop_seconds)).astype(audio.dtype)
     return audio
 
 
@@ -239,7 +239,7 @@ def make_mcse_dataset(args):
             'noise_root': args.mcse_dataset_train_noise_root,
             'speech_list': 'data/datasets/datasets_fullband/cleans_train',
             'noise_list': 'data/datasets/datasets_fullband/noises_train',
-            'mcse_settings': 'dataset/mcse_dataset_settings.json',
+            'mcse_settings': args.mcse_dataset_settings,
             'clip_seconds': 6
         })
     elif args.mcse_dataset_train_set == 'offline':
@@ -248,7 +248,7 @@ def make_mcse_dataset(args):
             'noisy_root': 'data/datasets/mcse_train/noisy'
         })
     val_dataset = McseDatasetOffline({
-        'clean_root': 'data/datasets/mcse_val/clean',
-        'noisy_root': 'data/datasets/mcse_val/noisy'
+        'clean_root': os.path.join(args.mcse_dataset_val_set,'clean'),
+        'noisy_root': os.path.join(args.mcse_dataset_val_set,'noisy')
     })
     return train_dataset, val_dataset

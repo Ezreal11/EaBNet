@@ -290,7 +290,7 @@ if __name__ == '__main__':
     parser.add_argument("--intra_connect", type=str, default="cat", choices=["cat", "add"])
     parser.add_argument("--norm_type", type=str, default="IN", choices=["BN", "IN", "cLN"])
     parser.add_argument("--fixed_seed", type=bool, default=False, choices=[True, False])
-    parser.add_argument("--freeze_eabnet", type=bool, default=False)
+    parser.add_argument("--freeze_eabnet", action='store_true', default=False)
 
     #postnet
     parser.add_argument("--gagnet_fft_num", type=int, default=320)
@@ -322,6 +322,8 @@ if __name__ == '__main__':
     parser.add_argument('--mcse_dataset_train_speech_root', type=str, default='data/datasets/datasets_fullband/clean_fullband/read_speech')
     parser.add_argument('--mcse_dataset_train_noise_root', type=str, default='data/datasets/datasets_fullband/noise_fullband')
     parser.add_argument('--mcse_dataset_train_set', type=str, choices=['online','offline'], default='online')
+    parser.add_argument('--mcse_dataset_settings', type=str)
+    parser.add_argument('--mcse_dataset_val_set', type=str)
 
     #saving parameters
     from datetime import datetime

@@ -1,0 +1,43 @@
+{
+    "audio": {
+        "fs": 16000,
+        "rir_method": "hybrid"
+    },
+    "room": {
+        "min_dim": [3,3,2.5],
+        "max_dim": [10,10,3],
+        "rt60": [0.05,0.7]
+    },
+    "mic_array": {
+        "mics": [
+            {"x":0,"y": 0.16},
+            {"x":0,"y": 0.12},
+            {"x":0,"y": 0.08},
+            {"x":0,"y": 0.04},
+            {"x":0,"y": 0.00},
+            {"x":0,"y":-0.04},
+            {"x":0,"y":-0.08},
+            {"x":0,"y":-0.12},
+            {"x":0,"y":-0.16}
+        ],
+        "ref_mic": 0,
+        "direction": {"x":0,"y":1},
+        "h": [1,1.5],
+        "min_dist_to_wall": 0.5
+    },
+    "target": {
+        "dist_to_mic_array": [1,5],
+        "h": [1,1.5],
+        "min_dist_to_wall": 0.5,
+        "fixed_doa": true
+    },
+    "noise": {
+        "min_doa_diff_wrt_target": 5,
+        "min_dist_to_mic_array": 0.5,
+        "n": [3,5],
+        "h": [1,1.5],
+        "SNR": [1,1]
+    },
+    "noisy_dBFS": [-35,-15]
+
+}

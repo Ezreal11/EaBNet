@@ -35,5 +35,6 @@ CUDA_VISIBLE_DEVICES=0 python train_distributed.py \
  --results_path "$exp_root/results" \
  --checkpoint_dir "$exp_root/checkpoints" \
  --mcse_dataset_train_set online \
-#  --freeze_eabnet true \
+ --mcse_dataset_val_set data/datasets/mcse_val_setting2 \
+ --mcse_dataset_settings dataset/mcse_dataset_settings_v2.json \
 #  --validate_once_before_train
