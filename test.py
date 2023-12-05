@@ -162,7 +162,7 @@ def test(args):
                  topo_type=args.topo_type, intra_connect=args.intra_connect, norm_type=args.norm_type,).to(device)
     checkpoint_path = args.model_path
     checkpoint = torch.load(checkpoint_path)
-    net.load_state_dict(checkpoint['model_state_dict'])
+    net.load_state_dict(checkpoint['model_state_dict'], strict=False)
     net.eval()
     print(f"Model loaded from {checkpoint_path}")
     
@@ -191,6 +191,8 @@ def test(args):
         esti_wav = esti_wav.cpu().numpy()   #[1, 76640]
         noisy_wav = x.squeeze(0).cpu().numpy()  #[4, 76672]
         target_wav = target.squeeze(0).cpu().numpy()    #[1, 76672]
+
+        #TODO: 认为esti_wav应该和target_stft的istft比，因为loss是两个stft的对比  也不对，评价应该和未经处理的比较
         ret = cal_single_metrics(target_wav[0], noisy_wav[0], esti_wav[0], sr)
         for k, v in ret.items():
             data[k].append(v)
@@ -212,7 +214,7 @@ def test(args):
 
 if __name__ == '__main__':
     parser = ArgumentParser(description='caluculate metrics')
-    parser.add_argument('--model_path',default="/data/wbh/l3das23/experiment/4gpu/28188.pth", type=str)
+    parser.add_argument('--model_path',default="/home/wbh/EaBNet/307152.pth", type=str)
     #eabnet parameters
     parser.add_argument("--batch_size", type=int, default=6)    #8 in paper
     parser.add_argument("--num_workers", type=int, default=0)
@@ -245,6 +247,24 @@ if __name__ == '__main__':
     parser.add_argument('--mcse_dataset_train_speech_root', type=str, default='data/datasets/datasets_fullband/clean_fullband/read_speech')
     parser.add_argument('--mcse_dataset_train_noise_root', type=str, default='data/datasets/datasets_fullband/noise_fullband')
     parser.add_argument('--mcse_dataset_train_set', type=str, choices=['online','offline'], default='online')
+
+    #postnet
+    parser.add_argument("--gagnet_fft_num", type=int, default=320)
+    parser.add_argument("--gagnet_k1", type=tuple, default=(2, 3))
+    parser.add_argument("--gagnet_k2", type=tuple, default=(1, 3))
+    parser.add_argument("--gagnet_c", type=int, default=64)
+    parser.add_argument("--gagnet_kd1", type=int, default=3)
+    parser.add_argument("--gagnet_cd1", type=int, default=64)
+    parser.add_argument("--gagnet_d_feat", type=int, default=256)
+    parser.add_argument("--gagnet_p", type=int, default=2)
+    parser.add_argument("--gagnet_q", type=int, default=3)
+    parser.add_argument("--gagnet_dilas", type=list, default=[1,2,5,9])
+    parser.add_argument("--gagnet_is_u2", type=bool, default=True, choices=[True, False])
+    parser.add_argument("--gagnet_is_causal", type=bool, default=True, choices=[True, False])
+    parser.add_argument("--gagnet_is_squeezed", type=bool, default=False, choices=[True, False])
+    parser.add_argument("--gagnet_acti_type", type=str, default="sigmoid", choices=["sigmoid", "tanh", "relu"])
+    parser.add_argument("--gagnet_intra_connect", type=str, default="cat", choices=["cat", "add"])
+    parser.add_argument("--gagnet_norm_type", type=str, default="IN", choices=["BN", "IN"])
     args = parser.parse_args()
 
     test(args)

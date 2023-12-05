@@ -134,7 +134,7 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
             if is_master and i in args.example_index:
                 writer = writer or SummaryWriter(args.checkpoint_dir)
                 writer.add_audio(f'audio{i}/estimated_audio{i}', esti_wav, iter, args.sr)
-                writer.add_audio(f'audio{i}/noisy_audio{i}', noisy_wav[:1,:], iter, args.sr)
+                writer.add_audio(f'audio{i}/noisy_audio{i}', np.mean(noisy_wav, axis=0), iter, args.sr)
                 writer.add_audio(f'audio{i}/target_audio{i}', target_wav, iter, args.sr)
 
                 # writer.add_image(f'spectrogram{i}/estimated_spectrogram{i}', coloring(torch.flip(esti_stft[..., 0], [1])), iter)
@@ -195,7 +195,7 @@ def main(rank, world_size, port, args):
     tr_dataset, val_dataset = make_dataset(args)
     trainloader = utils.DataLoader(tr_dataset, args.batch_size, num_workers=args.num_workers, drop_last= True, sampler=DistributedSampler(tr_dataset, num_replicas=world_size, rank=rank))
     valloader = utils.DataLoader(val_dataset, 1, sampler=DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False))
-    print("trainloader length:", len(trainloader), "valloader length:", len(valloader))
+    #print("trainloader length:", len(trainloader), "valloader length:", len(valloader))
     
     #-------------------------training loop-------------------------
     #print('pid:', rank)
@@ -208,6 +208,8 @@ def main(rank, world_size, port, args):
     for epoch in range(resume_epoch + 1, args.total_epoch):
         #for i, x in enumerate(dataloader):
         for i, (x, target) in enumerate(tqdm(trainloader,desc=f'Epoch:{epoch}') if is_master else trainloader):
+            #print(f'x_max: {x.max()}, x_min: {x.min()}')
+            #print(f'target_max: {target.max()}, target_min: {target.min()}')
             optimizer.zero_grad()
             noisy_stft, target_stft = prepare_data(x, target, device, args)
 
