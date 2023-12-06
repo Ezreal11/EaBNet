@@ -36,7 +36,7 @@ def load_audio_and_random_crop(filename,resample_fs, crop_seconds, start_seconds
         crop_seconds = len(audio) / fs
         n_points = len(audio) 
     else:
-        n_points = int(fs*crop_seconds)
+        n_points = round(fs*crop_seconds)
     if len(audio) < n_points:
         audio = np.append(audio, np.zeros(n_points-len(audio)))
     if start_seconds is None:
@@ -45,7 +45,7 @@ def load_audio_and_random_crop(filename,resample_fs, crop_seconds, start_seconds
         start = start_seconds*fs
     audio = audio[start:start+n_points]
     if resample_fs != fs:
-        audio = signal.resample(audio, int(resample_fs*crop_seconds)).astype(audio.dtype)
+        audio = signal.resample(audio, round(resample_fs*crop_seconds)).astype(audio.dtype)
     return audio
 
 
@@ -214,6 +214,8 @@ def generate_random_noisy_for_speech(opt, clip_seconds, target_speech, all_noise
     fs = opt['audio']['fs']
 
     audio_clean = load_audio_and_random_crop(os.path.join(speech_root, target_speech), resample_fs=fs, crop_seconds=clip_seconds, start_seconds=speech_start_sec)
+    if clip_seconds is None:
+        clip_seconds = len(audio_clean)/fs
     audio_noises = []
     for x in noise_list:
         audio_noises.append(load_audio_and_random_crop(os.path.join(noise_root,x), resample_fs=fs, crop_seconds=clip_seconds))
