@@ -336,6 +336,7 @@ if __name__ == '__main__':
                         help='Folder to write results dicts into')
     parser.add_argument('--checkpoint_dir', type=str, default=f'/data/wbh/l3das23/experiment/{exptime}',
                         help='Folder to write checkpoints into')
+    parser.add_argument('--exp_root', type=str, default=f'/data/wbh/l3das23/experiment/{exptime}')
     parser.add_argument('--path_images', type=str, default=None,
                         help="Path to the folder containing all images of Task1. None when using the audio-only version")
     parser.add_argument('--path_csv_images_train', type=str, default='/data/wbh/l3das23/L3DAS23_Task1_train/audio_image.csv',
@@ -349,6 +350,12 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
 
+    os.makedirs(args.exp_root, exist_ok=True)
+
+    with open(os.path.join(args.exp_root, 'args.pickle'), 'wb') as file:
+        pickle.dump(args, file)
+    
+    exit()
 
 
     world_size = torch.cuda.device_count()

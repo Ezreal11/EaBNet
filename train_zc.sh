@@ -24,16 +24,17 @@ if [ -d "$exp_root" ]; then
 fi
 
 
-CUDA_VISIBLE_DEVICES=0 python train_distributed.py \
+CUDA_VISIBLE_DEVICES=1 python train_distributed.py \
  --dataset mcse \
  --batch_size 8 \
- --num_workers  24 \
+ --num_workers 32 \
  --valid_interval 1 \
  --saving_interval 0.25 \
- --mics 8 \
- --M 8 \
+ --mics 9 \
+ --M 9 \
  --results_path "$exp_root/results" \
  --checkpoint_dir "$exp_root/checkpoints" \
+ --exp_root $exp_root \
  --mcse_dataset_train_set online \
  --mcse_dataset_val_set data/datasets/mcse_val_setting2 \
  --mcse_dataset_settings dataset/mcse_dataset_settings_v2.json \

@@ -137,7 +137,6 @@ class EaBNetWithPostNet(nn.Module):
     
     def forward(self, noisy_stft):
         esti0_stft = self.eabnet(noisy_stft)
-
         inpt = noisy_stft[...,self.ref_mic,:]
         inpt = rearrange(inpt, 'b t f c -> b c t f')
         esti1_stft_list = self.postnet(inpt, esti0_stft.detach())
