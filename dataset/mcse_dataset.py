@@ -49,13 +49,30 @@ def load_audio_and_random_crop(filename,resample_fs, crop_seconds, start_seconds
     return audio
 
 
-def generate_random_noisy_for_speech(opt, clip_seconds, target_speech, all_noises, speech_root, noise_root, speech_start_sec=None):
+def generate_random_noisy_for_speech(opt, clip_seconds, target_speech, all_noises, speech_root, noise_root, speech_start_sec=None, specific=None):
+    '''
+    specific keys:
+        - room_dim : [a,b,c]
+        - target_xyz : [x,y,z]
+        - mics_xyz : [x,y,z]
+        - noise_xyz_list : [[x,y,z],[x,y,z],...]
+        - noise_snr_list : [snr,snr,...]
+        - noise_name_list : [name,name,...]
+        - rt60 : x
+        - noisy_dBFS : x
+    '''
+
+    if specific is None:
+        specific = dict()
 
     # generate random room
 
-    min_dim = np.array(opt['room']['min_dim'])
-    max_dim = np.array(opt['room']['max_dim'])
-    room_dim = min_dim + (max_dim-min_dim)*np.random.random([3])
+    if 'room_dim' in specific:
+        room_dim = np.array(specific['room_dim'])
+    else:
+        min_dim = np.array(opt['room']['min_dim'])
+        max_dim = np.array(opt['room']['max_dim'])
+        room_dim = min_dim + (max_dim-min_dim)*np.random.random([3])
 
     # load mics
 
@@ -68,23 +85,37 @@ def generate_random_noisy_for_speech(opt, clip_seconds, target_speech, all_noise
 
     fail_count = 0
 
-    while True:
-        d = opt['target']['min_dist_to_wall']
-        target_x = random_float([d,room_dim[0]-d])
-        target_y = random_float([d,room_dim[1]-d])
-        target_z = random_float(opt['target']['h'])
+    random_target = True
+    random_mics = True
 
-        d = opt['mic_array']['min_dist_to_wall']
-        mics_x = random_float([d,room_dim[0]-d])
-        mics_y = random_float([d,room_dim[1]-d])
-        mics_z = random_float(opt['mic_array']['h'])
+    if 'target_xyz' in specific:
+        target_x, target_y, target_z = specific['target_xyz']
+        random_target = False
 
-        dist = sum([o*o for o in [target_x-mics_x, target_y-mics_y, target_z-mics_z]])**0.5
-        dist_bounds = opt['target']['dist_to_mic_array']
-        if dist<dist_bounds[0] or dist>dist_bounds[1]:
-            fail_count += 1
-            continue
-        break
+    if 'mics_xyz' in specific:
+        mics_x, mics_y, mics_z = specific['mics_xyz']
+        random_mics = False
+
+    if random_target or random_mics:
+        while True:
+            if random_target:
+                d = opt['target']['min_dist_to_wall']
+                target_x = random_float([d,room_dim[0]-d])
+                target_y = random_float([d,room_dim[1]-d])
+                target_z = random_float(opt['target']['h'])
+
+            if random_mics:
+                d = opt['mic_array']['min_dist_to_wall']
+                mics_x = random_float([d,room_dim[0]-d])
+                mics_y = random_float([d,room_dim[1]-d])
+                mics_z = random_float(opt['mic_array']['h'])
+
+            dist = sum([o*o for o in [target_x-mics_x, target_y-mics_y, target_z-mics_z]])**0.5
+            dist_bounds = opt['target']['dist_to_mic_array']
+            if dist<dist_bounds[0] or dist>dist_bounds[1]:
+                fail_count += 1
+                continue
+            break
 
     p_target = np.array([target_x,target_y,target_z])
     p_target_2d = p_target[:2]
@@ -101,45 +132,84 @@ def generate_random_noisy_for_speech(opt, clip_seconds, target_speech, all_noise
     p_mics = p_mics + p_mics_cen.reshape((3,1))
 
     # generate random noises position
-    n_noises = opt['noise']['n']
-    n_noises = np.random.randint(n_noises[0],n_noises[1]+1)
-    p_noise_list = []
-    noise_list = np.random.choice(all_noises, n_noises)
-    snr_list = []
+    n_noises = 0
 
-    for i in range(n_noises):
+    if 'noise_xyz_list' in specific:
+        p_noise_list = specific['noise_xyz_list']
+        n_noises = len(p_noise_list)
+    else:
+        p_noise_list = []
+    
+    if 'noise_snr_list' in specific:
+        snr_list = specific['noise_snr_list']
+        n_noises = len(snr_list)
+    else:
+        snr_list = []
+    
+    if 'noise_name_list' in specific:
+        noise_list = specific['noise_name_list']
+        n_noises = len(noise_list)
+    else:
+        noise_list = []
+    
+    if len(p_noise_list) != 0:
+        assert len(p_noise_list) == n_noises
+    if len(snr_list) != 0:
+        assert len(snr_list) == n_noises
+    if len(noise_list) != 0:
+        assert len(noise_list) == n_noises
+    
+    if n_noises == 0:
+        n_noises = opt['noise']['n']
+        n_noises = np.random.randint(n_noises[0], n_noises[1]+1)
+    
+    if len(noise_list) == 0:
+        noise_list = np.random.choice(all_noises, n_noises)
+    
+    if len(snr_list) == 0:
+        snr_list = [random_float(opt['noise']['SNR']) for i in range(n_noises)]
+    
+    if len(p_noise_list) == 0:
+        for i in range(n_noises):
+            while True:
+                x = random_float([0,room_dim[0]])
+                y = random_float([0,room_dim[1]])
+                z = random_float(opt['noise']['h'])
+                dist = sum([o*o for o in [x-mics_x, y-mics_y, z-mics_z]])**0.5
+                if dist < opt['noise']['min_dist_to_mic_array']:
+                    fail_count += 1
+                    continue
+                p_noise = np.array([x,y,z])
+                ang = cal_angle(p_target-p_mics_cen,p_noise-p_mics_cen)
+                if ang < opt['noise']['min_doa_diff_wrt_target']:
+                    fail_count += 1
+                    continue
+                break
+            p_noise_list.append(p_noise)
+
+    # generate random rt60
+
+    if 'rt60' in specific:
+        rt60_tgt = specific['rt60']
+        e_absorption, max_order = pra.inverse_sabine(rt60_tgt, room_dim)
+    else:
         while True:
-            x = random_float([0,room_dim[0]])
-            y = random_float([0,room_dim[1]])
-            z = random_float(opt['noise']['h'])
-            dist = sum([o*o for o in [x-mics_x, y-mics_y, z-mics_z]])**0.5
-            if dist < opt['noise']['min_dist_to_mic_array']:
-                fail_count += 1
-                continue
-            p_noise = np.array([x,y,z])
-            ang = cal_angle(p_target-p_mics_cen,p_noise-p_mics_cen)
-            if ang < opt['noise']['min_doa_diff_wrt_target']:
+            rt60_tgt = random_float(opt['room']['rt60'])
+            try:
+                e_absorption, max_order = pra.inverse_sabine(rt60_tgt, room_dim)
+            except ValueError:
+                # room too large for given rt60
                 fail_count += 1
                 continue
             break
-        p_noise_list.append(p_noise)
-        snr_list.append(random_float(opt['noise']['SNR']))
-
-    # generate random rt60
-    while True:
-        rt60_tgt = random_float(opt['room']['rt60'])
-        try:
-            e_absorption, max_order = pra.inverse_sabine(rt60_tgt, room_dim)
-        except ValueError:
-            # room too large for given rt60
-            fail_count += 1
-            continue
-        break
 
     if fail_count >= 50:
         print(f'Random position generation failed {fail_count} times in a sample, the restriction may be too tight')
 
-    noisy_dBFS = random_float(opt['noisy_dBFS'])
+    if 'noisy_dBFS' in specific:
+        noisy_dBFS = specific['noisy_dBFS']
+    else:
+        noisy_dBFS = random_float(opt['noisy_dBFS'])
 
     fs = opt['audio']['fs']
 
