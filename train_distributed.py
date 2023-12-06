@@ -235,6 +235,7 @@ def main(rank, world_size, port, args):
 
                     for k in loss_list.keys():
                         writer.add_scalar('loss/'+k, sum(loss_list[k])/len(loss_list[k]), current_iter)
+                        loss_list[k] = []
 
                     #writer.add_scalar('loss', sum(loss_list)/len(loss_list), current_iter)  #current_iter*world_size*args.batch_size
                     #loss_list = []
@@ -354,9 +355,6 @@ if __name__ == '__main__':
 
     with open(os.path.join(args.exp_root, 'args.pickle'), 'wb') as file:
         pickle.dump(args, file)
-    
-    exit()
-
 
     world_size = torch.cuda.device_count()
     port = _get_free_port()

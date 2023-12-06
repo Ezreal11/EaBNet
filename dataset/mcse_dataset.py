@@ -31,7 +31,12 @@ def cal_rotate_matrix_2d(v,v_tgt):
 
 def load_audio_and_random_crop(filename,resample_fs, crop_seconds, start_seconds=None):
     fs, audio = wavfile.read(filename)
-    n_points = int(fs*crop_seconds)
+    assert len(audio.shape)==1
+    if crop_seconds is None:
+        crop_seconds = len(audio) / fs
+        n_points = len(audio) 
+    else:
+        n_points = int(fs*crop_seconds)
     if len(audio) < n_points:
         audio = np.append(audio, np.zeros(n_points-len(audio)))
     if start_seconds is None:
