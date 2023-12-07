@@ -154,8 +154,10 @@ def main(rank, world_size, port, args):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = str(port)
     is_master = (rank == 0)
-    #writer = SummaryWriter(args.checkpoint_dir)
     writer = None
+    if is_master:
+        writer = SummaryWriter(args.checkpoint_dir)
+    #writer = None
     # 初始化进程组
     torch.distributed.init_process_group('nccl', rank=rank, world_size=world_size)
     # 设置设备
@@ -189,24 +191,20 @@ def main(rank, world_size, port, args):
 
     net = DDP(net, device_ids=[device])
     net.train()
-    #print("The number of trainable parameters is:{}".format(numParams(net)))
 
     #dataset and dataloader
     tr_dataset, val_dataset = make_dataset(args)
     trainloader = utils.DataLoader(tr_dataset, args.batch_size, num_workers=args.num_workers, drop_last= True, sampler=DistributedSampler(tr_dataset, num_replicas=world_size, rank=rank))
     valloader = utils.DataLoader(val_dataset, 1, sampler=DistributedSampler(val_dataset, num_replicas=world_size, rank=rank, shuffle=False))
-    #print("trainloader length:", len(trainloader), "valloader length:", len(valloader))
     
+
     #-------------------------training loop-------------------------
-    #print('pid:', rank)
-    
     #validation
     if args.validate_once_before_train:
         evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
 
     loss_list = dict()
     for epoch in range(resume_epoch + 1, args.total_epoch):
-        #for i, x in enumerate(dataloader):
         for i, (x, target) in enumerate(tqdm(trainloader,desc=f'Epoch:{epoch}') if is_master else trainloader):
             #print(f'x_max: {x.max()}, x_min: {x.min()}')
             #print(f'target_max: {target.max()}, target_min: {target.min()}')
@@ -241,7 +239,6 @@ def main(rank, world_size, port, args):
                     #loss_list = []
                 #save checkpoint
                 if current_iter % int(args.saving_interval * len(trainloader)) == 0:
-                    #writer.add_scalar('loss', mean_loss, current_iter)
                     save_checkpoint(net, optimizer, current_iter, epoch ,os.path.join(args.checkpoint_dir, f'{current_iter}.pth'))
             
             #validation

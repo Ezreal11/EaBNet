@@ -4,7 +4,12 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python train_distributed.py \
  --num_workers 16 \
  --mics 8 \
  --M 8 \
- --checkpoint_dir "/data/wbh/l3das23/experiment/4gpu"\
- --results_path "/data/wbh/l3das23/experiment/4gpu"\
- --saving_interval 0.25\
- --valid_interval 0.25
+ --checkpoint_dir "/data/wbh/l3das23/experiment/union" \
+ --results_path "/data/wbh/l3das23/experiment/union" \
+ --saving_interval 0.25 \
+ --valid_interval 0.25 \
+ --mcse_dataset_train_set offline \
+ --mcse_dataset_val_set data/datasets/mcse_val \
+ --mcse_dataset_settings dataset/mcse_dataset_settings.json \
+ --validate_once_before_train \
+ --example_index 0 10 20 30 40 50 60 70 80 90 100 110 120 130 140 150 160 170 180 190 200
