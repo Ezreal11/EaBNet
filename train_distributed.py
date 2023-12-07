@@ -105,7 +105,7 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
     model.eval()
     loss_list = []
     with torch.no_grad():
-        for i, (x, target) in enumerate(tqdm(valloader,desc=f'Valid:') if is_master else valloader):
+        for i, (x, target) in enumerate(tqdm(valloader,desc=f'Valid') if is_master else valloader):
             target = target.to(device)
             x = x.to(device)
             noisy_stft, target_stft = prepare_data(x, target, device, args)
@@ -144,7 +144,7 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
 
     mean_loss = sum(loss_list)/len(loss_list)
     if is_master:    
-        print('test_loss:', mean_loss)
+        #print('test_loss:', mean_loss)
         writer.add_scalar('valid_loss', mean_loss, iter)
 
     model.train()
@@ -180,7 +180,7 @@ def main(rank, world_size, port, args):
 
     #resume from checkpoint
     current_iter = 0
-    resume_epoch = 0
+    resume_epoch = -1
     cplist = glob.glob(f"{args.checkpoint_dir}/*.pth")
     if len(cplist) > 0:
         paths = [int(os.path.basename(path).split('.')[0]) for path in cplist]
@@ -205,7 +205,7 @@ def main(rank, world_size, port, args):
 
     loss_list = dict()
     for epoch in range(resume_epoch + 1, args.total_epoch):
-        for i, (x, target) in enumerate(tqdm(trainloader,desc=f'Epoch:{epoch}') if is_master else trainloader):
+        for i, (x, target) in enumerate(tqdm(trainloader,desc=f'Epoch{epoch}') if is_master else trainloader):
             #print(f'x_max: {x.max()}, x_min: {x.min()}')
             #print(f'target_max: {target.max()}, target_min: {target.min()}')
             optimizer.zero_grad()
