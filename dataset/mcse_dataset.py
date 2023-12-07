@@ -49,7 +49,7 @@ def load_audio_and_random_crop(filename,resample_fs, crop_seconds, start_seconds
     return audio
 
 
-def generate_random_noisy_for_speech(opt, clip_seconds, target_speech, all_noises, speech_root, noise_root, speech_start_sec=None, specific=None):
+def generate_random_noisy_for_speech(opt, clip_seconds, target_speech, all_noises, speech_root, noise_root, speech_start_sec=None, noise_start_sec=None, specific=None):
     '''
     specific keys:
         - room_dim : [a,b,c]
@@ -218,7 +218,7 @@ def generate_random_noisy_for_speech(opt, clip_seconds, target_speech, all_noise
         clip_seconds = len(audio_clean)/fs
     audio_noises = []
     for x in noise_list:
-        audio_noises.append(load_audio_and_random_crop(os.path.join(noise_root,x), resample_fs=fs, crop_seconds=clip_seconds))
+        audio_noises.append(load_audio_and_random_crop(os.path.join(noise_root,x), resample_fs=fs, crop_seconds=clip_seconds, start_seconds=noise_start_sec))
 
 
     meta = {

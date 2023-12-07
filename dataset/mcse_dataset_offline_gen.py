@@ -8,6 +8,7 @@ sys.path.append('..')
 from mcse_dataset import generate_random_noisy_for_speech
 import multiprocessing as mp
 import argparse
+import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--output_dir', type=str, required=True)
@@ -75,7 +76,17 @@ def worker(i):
         write_audio(sample['clean'],fs,os.path.join(clean_root,f'{name}.wav'))
         t += clip_seconds
 
-pool = mp.Pool(16)
+def set_seed():
+    np.random.seed(os.getpid()+12345)
+    print(f'p{os.getpid()} set seed')
+    time.sleep(1)
+
+n_workers = 16
+pool = mp.Pool(n_workers)
+    
+for i in range(n_workers):
+    pool.apply_async(set_seed)
+
 idx = range(len(speech_list))
 with tqdm(total=len(idx)) as pbar:
     for i in idx:
