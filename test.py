@@ -172,7 +172,7 @@ def test(args):
     data = {"filename": [], "pesq":[], "nb_pesq": [],"stoi":[],  "estoi": [], "si_sdr": [], "si_sir": [],
               "si_sar": [], "csig": [], "cbak": [], "covl": []}
 
-    for i, (x, target) in enumerate(tqdm(valloader,desc=f'Valid:')):
+    for i, (x, target) in enumerate(tqdm(valloader,desc=f'Test')):
         target = target.to(device)
         x = x.to(device)
         noisy_stft, target_stft = prepare_data(x, target, device, args)
@@ -192,7 +192,7 @@ def test(args):
         noisy_wav = x.squeeze(0).cpu().numpy()  #[4, 76672]
         target_wav = target.squeeze(0).cpu().numpy()    #[1, 76672]
 
-        #TODO: 认为esti_wav应该和target_stft的istft比，因为loss是两个stft的对比  也不对，评价应该和未经处理的比较
+
         ret = cal_single_metrics(target_wav[0], noisy_wav[0], esti_wav[0], sr)
         for k, v in ret.items():
             data[k].append(v)
@@ -204,7 +204,7 @@ def test(args):
         if len(v) > 0:
             new_data[k] = v
     data = new_data
-    score_path = os.path.join(os.path.dirname(args.model_path), "score.txt")
+    score_path = os.path.join(os.path.dirname(args.model_path), f"{args.model_path.split('.')[0]}.txt")
     df = pd.DataFrame(data)
     with open(score_path, 'w') as f:
         for k, v in data.items():
@@ -214,7 +214,7 @@ def test(args):
 
 if __name__ == '__main__':
     parser = ArgumentParser(description='caluculate metrics')
-    parser.add_argument('--model_path',default="/home/wbh/EaBNet/307152.pth", type=str)
+    parser.add_argument('--model_path',default="/home/wbh/EaBNet/281996.pth", type=str)
     #eabnet parameters
     parser.add_argument("--batch_size", type=int, default=6)    #8 in paper
     parser.add_argument("--num_workers", type=int, default=0)
@@ -247,6 +247,8 @@ if __name__ == '__main__':
     parser.add_argument('--mcse_dataset_train_speech_root', type=str, default='data/datasets/datasets_fullband/clean_fullband/read_speech')
     parser.add_argument('--mcse_dataset_train_noise_root', type=str, default='data/datasets/datasets_fullband/noise_fullband')
     parser.add_argument('--mcse_dataset_train_set', type=str, choices=['online','offline'], default='online')
+    parser.add_argument('--mcse_dataset_settings', type=str)
+    parser.add_argument('--mcse_dataset_val_set', type=str)
 
     #postnet
     parser.add_argument("--gagnet_fft_num", type=int, default=320)
