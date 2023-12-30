@@ -18,6 +18,8 @@ from dataset import make_dataset
 # from test import cal_single_metrics
 from torch.utils.tensorboard import SummaryWriter
 
+from test import cal_single_metrics
+
 
 def _get_free_port():
   import socketserver
@@ -104,6 +106,7 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
 
     model.eval()
     loss_list = []
+    #metrics = None
     with torch.no_grad():
         for i, (x, target) in enumerate(tqdm(valloader,desc=f'Valid') if is_master else valloader):
             target = target.to(device)
@@ -128,8 +131,8 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
             noisy_wav = x.squeeze(0).cpu().numpy()  #[4, 76672]
             target_wav = target.squeeze(0).cpu().numpy()    #[1, 76672]
             
-            #ret = cal_single_metrics(target_wav[0], noisy_wav[0], esti_wav[0], sr)
-
+            #score = cal_single_metrics(target_wav[0], noisy_wav[0], esti_wav[0], sr)
+            #metrics = {key: metrics.get(key, 0) + score.get(key, 0) for key in set(metrics) | set(score)} if metrics is not None else score
             #save an example
             if is_master and i in args.example_index:
                 writer = writer or SummaryWriter(args.checkpoint_dir)
@@ -145,7 +148,10 @@ def evaluate(is_master, model, device, criterion, valloader, iter, writer, args)
     mean_loss = sum(loss_list)/len(loss_list)
     if is_master:    
         #print('test_loss:', mean_loss)
-        writer.add_scalar('valid_loss', mean_loss, iter)
+        writer.add_scalar('valid/valid_loss', mean_loss, iter)
+        '''for key in metrics.keys():
+            metrics[key] = metrics[key] / len(loss_list)
+            writer.add_scalar('valid/'+key, metrics[key], iter)'''
 
     model.train()
 
@@ -204,6 +210,7 @@ def main(rank, world_size, port, args):
         evaluate(is_master, net, device, loss, valloader, current_iter, writer, args)
 
     loss_list = dict()
+    
     for epoch in range(resume_epoch + 1, args.total_epoch):
         for i, (x, target) in enumerate(tqdm(trainloader,desc=f'Epoch{epoch}') if is_master else trainloader):
             #print(f'x_max: {x.max()}, x_min: {x.min()}')

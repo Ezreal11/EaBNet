@@ -4,7 +4,7 @@ from EaBNet import make_eabnet_with_postnet
 from train_distributed import prepare_data
 from dataset.mcse_dataset import generate_random_noisy_for_speech, load_audio_and_random_crop
 import json
-import os
+import sys
 from scipy.io import wavfile
 import scipy.signal as signal
 import matplotlib.pyplot as plt
@@ -24,7 +24,12 @@ if __name__ == '__main__':
     audio_name = '1m'
     audio_dir = './demo'
     audio_path = os.path.join(audio_dir, audio_name+'.wav')
-    
+    ouput_path = f'{audio_name}_out.wav'
+
+    if len(sys.argv) > 2:
+        audio_path = sys.argv[1]
+        ouput_path = sys.argv[2]
+
     model = model.cuda()
     
     noisy, sr = torchaudio.load(audio_path)
@@ -55,5 +60,5 @@ if __name__ == '__main__':
         print(esti_stft.shape)
         esti_wav = torch.istft(torch.view_as_complex(esti_stft.contiguous()), fft_num, win_shift, win_size, torch.hann_window(win_size).to(device))
         esti_wav = esti_wav.cpu().numpy()   #[1, 76640]
-        wavfile.write(f'{audio_name}_out.wav', 16000, esti_wav[0])
+        wavfile.write(ouput_path, 16000, esti_wav[0])
         #show_audio(esti_wav[0], 16000,'esti_wav')
